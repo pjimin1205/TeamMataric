@@ -30,6 +30,10 @@ int pauseTime = 2500;   //time before robot moves
 int stepTime = 500;     //delay time between high and low on step pin
 int wait_time = 1000;   //delay for printing data
 
+int minIntervalAngle = 13.79; // degrees
+int leftSpd = 200;
+int rightSpd = 200;
+
 //define encoder pins
 #define LEFT 0        //left encoder
 #define RIGHT 1       //right encoder
@@ -147,6 +151,85 @@ void runToStop ( void ) {
   }
 }
 
+/*
+  Turn the robot to a specified angle, rotating around its center
+  Can only turn with intervals of 13.79 deg.
+*/
+void goToAngle(int angle){
+  int numSteps = angle / minIntervalAngle;
+  long positions[2]; // Array of desired stepper positions
+  positions[0] = numSteps; //right motor absolute position
+  positions[1] = -numSteps; //left motor absolute position
+  steppers.moveTo(positions);
+
+  stepperLeft.setSpeed(leftSpd);//set left motor speed
+  stepperRight.setSpeed(rightSpd);//set right motor speed
+
+  steppers.runSpeedToPosition(); // Blocks until all are in position
+}
+
+/*
+  direction is either -1 or 1
+  pivot left is 1
+  pivot right is -1
+*/
+void pivot(int direction) {
+  int angle = 360;
+  int numStep = angle / minIntervalAngle;
+  numSteps = 2000;
+
+  stepperLeft.moveTo(0);//left motor absolute position
+  stepperRight.moveTo(numSteps);//right motor absolute position
+  stepperLeft.setSpeed(0);
+  stepperRight.setSpeed(direction*rightSpd);
+  steppers.runSpeedToPosition(); // Blocks until all are in position
+}
+
+/*
+  Direction is either -1 or 1.
+  1 is to the left.
+  -1 is to the right.
+*/
+void spin(int direction) {
+  goToAngle(direction*360*5); // rotate 5 times
+}
+
+/*
+  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
+  Direction is -1 or 1
+  Turn left is 1
+  Turn right is -1
+*/
+void turn(int direction) {
+  int numSteps = direction*2000;
+  long positions[2]; // Array of desired stepper positions
+  positions[0] = numSteps; //right motor absolute position
+  positions[1] = -numSteps; //left motor absolute position
+  steppers.moveTo(positions);
+
+  stepperLeft.setSpeed(leftSpd);//set left motor speed
+  int diff_rightSpd = rightSpd + 300;
+  stepperRight.setSpeed(diff_rightSpd);//set right motor speed
+
+  steppers.runSpeedToPosition(); // Blocks until all are in position
+}
+/*
+  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
+*/
+void forward(int distance) {
+}
+/*
+  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
+*/
+void reverse(int distance) {
+}
+/*
+  Stops the stepper motors.
+*/
+void stop() {
+  steppers.stop();
+}
+
 void setup() {
   int baudrate = 9600; //serial monitor baud rate'
   init_stepper(); //set up stepper motor
@@ -158,7 +241,27 @@ void setup() {
   Serial.begin(baudrate);     //start serial monitor communication
   Serial.println("Robot starting...Put ON TEST STAND");
   delay(pauseTime); //always wait 2.5 seconds before the robot moves
+  
+  int demo1PauseTime = 1000;
 
+  int forwardDistance_cm = 30;
+  forward(forwardDistance_cm);
+  delay(demo1PauseTime);
+  reverse(forwardDistance_cm);
+  delay(demo1PauseTime);
+  spin(1); // spins left
+  delay(demo1PauseTime);
+  spin(-1); // spins right
+  delay(demo1PauseTime);
+  turn(1);
+  delay(demo1PauseTime);
+  turn(-1);
+  delay(demo1PauseTime);
+  pivot(1); // left
+  delay(demo1PauseTime);
+  pivot(-1); // right
+  delay(demo1PauseTime);
+  stop();
 }
 
 void loop() {
