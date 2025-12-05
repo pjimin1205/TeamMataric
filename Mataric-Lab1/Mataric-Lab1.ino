@@ -132,6 +132,7 @@ void runAtSpeed ( void ) {
    then stop it
 */
 void runToStop ( void ) {
+  Serial.println("Run to stop");
   int runNow = 1;
   int rightStopped = 0;
   int leftStopped = 0;
@@ -156,13 +157,18 @@ void runToStop ( void ) {
   Can only turn with intervals of 13.79 deg.
 */
 void goToAngle(int angle){
-  int numSteps = angle / minIntervalAngle;
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  Serial.println("Go To Angle");
+  //int numSteps = angle / minIntervalAngle;
+  int numSteps = 1000;
   long positions[2]; // Array of desired stepper positions
   positions[0] = numSteps; //right motor absolute position
   positions[1] = -numSteps; //left motor absolute position
   steppers.moveTo(positions);
 
-  stepperLeft.setSpeed(leftSpd);//set left motor speed
+  stepperLeft.setSpeed(-leftSpd);//set left motor speed
   stepperRight.setSpeed(rightSpd);//set right motor speed
 
   steppers.runSpeedToPosition(); // Blocks until all are in position
@@ -174,15 +180,36 @@ void goToAngle(int angle){
   pivot right is -1
 */
 void pivot(int direction) {
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  long positions[2]; // Array of desired stepper positions
+
+  Serial.println("Pivot");
   int angle = 360;
   int numSteps = angle / minIntervalAngle;
   numSteps = 2000;
 
-  stepperLeft.moveTo(0);//left motor absolute position
-  stepperRight.moveTo(numSteps);//right motor absolute position
-  stepperLeft.setSpeed(0);
-  stepperRight.setSpeed(direction*rightSpd);
-  steppers.runSpeedToPosition(); // Blocks until all are in position
+ if(direction > 0){
+  Serial.println("Pivot Left");
+  positions[0] = numSteps; //right motor absolute position
+  positions[1] = 0; //left motor absolute position
+  steppers.moveTo(positions);
+  stepperLeft.setSpeed(leftSpd);//set left motor speed
+  stepperRight.setSpeed(rightSpd);//set right motor speed
+  } else{
+  Serial.println("Pivot Right");
+  positions[0] = 0; //right motor absolute position
+  positions[1] = numSteps; //left motor absolute position
+  steppers.moveTo(positions);
+  stepperLeft.setSpeed(leftSpd);//set left motor speed
+  stepperRight.setSpeed(rightSpd);//set right motor speed
+  }
+  
+
+  steppers.runSpeedToPosition();
+
+
 }
 
 /*
@@ -191,7 +218,21 @@ void pivot(int direction) {
   -1 is to the right.
 */
 void spin(int direction) {
-  goToAngle(direction*360*5); // rotate 5 times
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  Serial.println("Spin");
+  //int numSteps = angle / minIntervalAngle;
+  int numSteps = 1000;
+  long positions[2]; // Array of desired stepper positions
+  positions[0] = direction*numSteps; //right motor absolute position
+  positions[1] = -direction*numSteps; //left motor absolute position
+  steppers.moveTo(positions);
+
+  stepperLeft.setSpeed(-direction*leftSpd);//set left motor speed
+  stepperRight.setSpeed(direction*rightSpd);//set right motor speed
+
+  steppers.runSpeedToPosition(); // Blocks until all are in position
 }
 
 /*
@@ -201,15 +242,30 @@ void spin(int direction) {
   Turn right is -1
 */
 void turn(int direction) {
-  int numSteps = direction*2000;
-  long positions[2]; // Array of desired stepper positions
-  positions[0] = numSteps; //right motor absolute position
-  positions[1] = -numSteps; //left motor absolute position
-  steppers.moveTo(positions);
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
 
-  stepperLeft.setSpeed(leftSpd);//set left motor speed
-  int diff_rightSpd = rightSpd + 300;
-  stepperRight.setSpeed(diff_rightSpd);//set right motor speed
+  Serial.println("Turn");
+  int numSteps = 2000;
+  int leftSpeed = 2*leftSpd;
+  int rightSpeed = 2*rightSpd;
+
+  long positions[2]; // Array of desired stepper positions
+  if(direction > 0){
+  Serial.println("Turning Left");
+  positions[0] = 2*numSteps; //right motor absolute position
+  positions[1] = numSteps; //left motor absolute position
+  steppers.moveTo(positions);
+  stepperLeft.setSpeed(leftSpeed);//set left motor speed
+  stepperRight.setSpeed(rightSpeed*2);//set right motor speed
+  } else{
+  Serial.println("Turning Right");
+  positions[0] = numSteps; //right motor absolute position
+  positions[1] = 2*numSteps; //left motor absolute position
+  steppers.moveTo(positions);
+  stepperLeft.setSpeed(leftSpeed*2);//set left motor speed
+  stepperRight.setSpeed(rightSpeed);//set right motor speed
+  }
 
   steppers.runSpeedToPosition(); // Blocks until all are in position
 }
@@ -217,21 +273,37 @@ void turn(int direction) {
   INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
 */
 void forward(int distance) {
-  stepperRight.moveTo(distance); 
-  stepperLeft.moveTo(distance); 
+  Serial.println("Forward");
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  stepperLeft.moveTo(distance);//left motor absolute position
+  stepperRight.moveTo(distance);//right motor absolute position
+  stepperLeft.setSpeed(1000);
+  stepperRight.setSpeed(1000);
+
+  steppers.runSpeedToPosition();
 }
 /*
   INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
 */
 void reverse(int distance) {
-  distance = -distance;
-  stepperRight.moveTo(distance); 
-  stepperLeft.moveTo(distance); 
+  Serial.println("Reverse");
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  stepperLeft.moveTo(-distance);//left motor absolute position
+  stepperRight.moveTo(-distance);//right motor absolute position
+  stepperLeft.setSpeed(-1000);
+  stepperRight.setSpeed(-1000);
+
+  steppers.runSpeedToPosition();
 }
 /*
   Stops the stepper motors.
 */
 void stop() {
+  Serial.println("Stop");
   stepperLeft.stop();
   stepperRight.stop();
 }
@@ -245,12 +317,13 @@ void setup() {
 
 
   Serial.begin(baudrate);     //start serial monitor communication
+
   Serial.println("Robot starting...Put ON TEST STAND");
   delay(pauseTime); //always wait 2.5 seconds before the robot moves
   
-  int demo1PauseTime = 1000;
+  int demo1PauseTime = 2000;
 
-  int forwardDistance_cm = 30;
+  int forwardDistance_cm = 5000;
   forward(forwardDistance_cm);
   delay(demo1PauseTime);
   reverse(forwardDistance_cm);
@@ -273,6 +346,7 @@ void setup() {
 void loop() {
   // put your main code here, to run repeatedly:
 //print_encoder_data();   //prints encoder data
+  Serial.println("We are looping");
 
   delay(wait_time);               //wait to move robot or read data
 }
