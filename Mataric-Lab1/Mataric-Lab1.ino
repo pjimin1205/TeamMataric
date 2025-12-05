@@ -175,7 +175,7 @@ void goToAngle(int angle){
 */
 void pivot(int direction) {
   int angle = 360;
-  int numStep = angle / minIntervalAngle;
+  int numSteps = angle / minIntervalAngle;
   numSteps = 2000;
 
   stepperLeft.moveTo(0);//left motor absolute position
@@ -217,17 +217,23 @@ void turn(int direction) {
   INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
 */
 void forward(int distance) {
+  stepperRight.moveTo(distance); 
+  stepperLeft.moveTo(distance); 
 }
 /*
   INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
 */
 void reverse(int distance) {
+  distance = -distance;
+  stepperRight.moveTo(distance); 
+  stepperLeft.moveTo(distance); 
 }
 /*
   Stops the stepper motors.
 */
 void stop() {
-  steppers.stop();
+  stepperLeft.stop();
+  stepperRight.stop();
 }
 
 void setup() {
