@@ -321,8 +321,8 @@ void setup() {
   Serial.println("Robot starting...Put ON TEST STAND");
   delay(pauseTime); //always wait 2.5 seconds before the robot moves
   
+  // Lab 1 Basic functionality demo
   int demo1PauseTime = 2000;
-
   int forwardDistance_cm = 5000;
   forward(forwardDistance_cm);
   delay(demo1PauseTime);
@@ -341,6 +341,9 @@ void setup() {
   pivot(-1); // right
   delay(demo1PauseTime);
   stop();
+  // end of basic functionality demo
+
+  
 }
 
 void loop() {
