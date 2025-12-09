@@ -185,6 +185,55 @@ void goToAngle(int angle){
 
 /*
   direction is either -1 or 1
+  circle left is 1
+  circle right is -1
+*/
+
+void moveCircle(int diam, int direction){
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  Serial.println("Circle");
+
+  int totalOuter = diam + WIDTH_OF_BOT_CM; //Outer wheel path diameter in cm
+  int totalInner = diam - WIDTH_OF_BOT_CM; //Inner wheel path diameter in cm
+
+  int outerCirc = totalOuter * PI; //Circumference of outerwheel path in cm
+  int innerCirc = totalInner * PI; //Circumference of innerwheel path in cm
+
+  int numStepsOuter = outerCirc * CM_TO_STEPS_CONV; //turn circumference to steps
+  int numStepsInner = innerCirc * CM_TO_STEPS_CONV;
+
+  int outerWheelSpd = 400; //steps per sec
+
+  int timeToComplete = numStepsOuter/outerWheelSpd; //time it will take the outer wheel to complete path in sec
+
+  int innerWheelSpd = numStepsInner/timeToComplete; //matching up the completion times by setting inner wheel speed
+
+  long positions[2]; // Array of desired stepper positions
+
+  if(direction > 0){
+  Serial.println("Pivot Left");
+  positions[0] = numStepsOuter; //right motor absolute position
+  positions[1] = numStepsInner; //left motor absolute position
+  steppers.moveTo(positions);
+  stepperLeft.setSpeed(innerWheelSpd);//set left motor speed
+  stepperRight.setSpeed(outerWheelSpd);//set right motor speed
+  } else{
+  Serial.println("Pivot Right");
+  positions[0] = numStepsInner; //right motor absolute position
+  positions[1] = numStepsOuter; //left motor absolute position
+  steppers.moveTo(positions);
+  stepperLeft.setSpeed(outerWheelSpd);//set left motor speed
+  stepperRight.setSpeed(innerWheelSpd);//set right motor speed
+  }
+
+  steppers.runSpeedToPosition();
+
+}
+
+/*
+  direction is either -1 or 1
   pivot left is 1
   pivot right is -1
 */
@@ -332,6 +381,7 @@ void setup() {
   
   // Lab 1 Basic functionality demo
   int demo1PauseTime = 1000;
+  /*
   forward(TWO_FEET_IN_STEPS);
   delay(demo1PauseTime);
   reverse(TWO_FEET_IN_STEPS);
@@ -349,7 +399,14 @@ void setup() {
   pivot(-1); // right
   delay(demo1PauseTime);
   stop();
+  */
   // end of basic functionality demo
+
+  //Begin Circle Demo
+  moveCircle(61, 1);
+  delay(1000);
+  moveCircle(61, -1);
+
 
   
 }
