@@ -43,6 +43,15 @@ volatile long encoder[2] = {0, 0};  //interrupt variable to hold number of encod
 int lastSpeed[2] = {0, 0};          //variable to hold encoder speed (left, right)
 int accumTicks[2] = {0, 0};         //variable to hold accumulated ticks since last reset
 
+// Constant Vars
+#define INCHES_TO_CM 2.54
+#define TWO_FEET_IN_STEPS 1848
+#define WIDTH_OF_BOT_CM 21.2
+#define WHEEL_DIAM_CM 8.4
+#define STEPS_PER_ROT 800
+#define CM_PER_ROTATION 26.39
+#define CM_TO_STEPS_CONV STEPS_PER_ROT/CM_PER_ROTATION
+
 // Helper Functions
 
 //interrupt function to count left encoder tickes
@@ -186,9 +195,8 @@ void pivot(int direction) {
   long positions[2]; // Array of desired stepper positions
 
   Serial.println("Pivot");
-  int angle = 360;
-  int numSteps = angle / minIntervalAngle;
-  numSteps = 2000;
+  double angle = PI/2;
+  int numSteps = angle*WIDTH_OF_BOT_CM*CM_TO_STEPS_CONV;
 
  if(direction > 0){
   Serial.println("Pivot Left");
@@ -220,10 +228,11 @@ void pivot(int direction) {
 void spin(int direction) {
   stepperLeft.setCurrentPosition(0);
   stepperRight.setCurrentPosition(0);
+  double angle = PI/2;
 
   Serial.println("Spin");
   //int numSteps = angle / minIntervalAngle;
-  int numSteps = 1000;
+  int numSteps = angle*WIDTH_OF_BOT_CM/2*CM_TO_STEPS_CONV;
   long positions[2]; // Array of desired stepper positions
   positions[0] = direction*numSteps; //right motor absolute position
   positions[1] = -direction*numSteps; //left motor absolute position
@@ -279,8 +288,8 @@ void forward(int distance) {
 
   stepperLeft.moveTo(distance);//left motor absolute position
   stepperRight.moveTo(distance);//right motor absolute position
-  stepperLeft.setSpeed(1000);
-  stepperRight.setSpeed(1000);
+  stepperLeft.setSpeed(200);
+  stepperRight.setSpeed(200);
 
   steppers.runSpeedToPosition();
 }
@@ -294,8 +303,8 @@ void reverse(int distance) {
 
   stepperLeft.moveTo(-distance);//left motor absolute position
   stepperRight.moveTo(-distance);//right motor absolute position
-  stepperLeft.setSpeed(-1000);
-  stepperRight.setSpeed(-1000);
+  stepperLeft.setSpeed(-200);
+  stepperRight.setSpeed(-200);
 
   steppers.runSpeedToPosition();
 }
@@ -322,11 +331,10 @@ void setup() {
   delay(pauseTime); //always wait 2.5 seconds before the robot moves
   
   // Lab 1 Basic functionality demo
-  int demo1PauseTime = 2000;
-  int forwardDistance_cm = 5000;
-  forward(forwardDistance_cm);
+  int demo1PauseTime = 1000;
+  forward(TWO_FEET_IN_STEPS);
   delay(demo1PauseTime);
-  reverse(forwardDistance_cm);
+  reverse(TWO_FEET_IN_STEPS);
   delay(demo1PauseTime);
   spin(1); // spins left
   delay(demo1PauseTime);
