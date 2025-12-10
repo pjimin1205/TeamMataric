@@ -5,7 +5,9 @@
 
 //state LEDs connections
 #define redLED 5            //red LED for displaying states
+#define greenLED 6            //green LED for displaying states
 #define grnLED 6            //green LED for displaying states
+#define yellowLED 7            //yellow LED for displaying states
 #define ylwLED 7            //yellow LED for displaying states
 #define enableLED 13        //stepper enabled LED
 int leds[3] = {5,6,7};      //array of LED pin numbers
@@ -31,8 +33,8 @@ int stepTime = 500;     //delay time between high and low on step pin
 int wait_time = 1000;   //delay for printing data
 
 int minIntervalAngle = 13.79; // degrees
-int leftSpd = 200;
-int rightSpd = 200;
+int leftSpd = 1000;
+int rightSpd = 1000;
 
 //define encoder pins
 #define LEFT 0        //left encoder
@@ -162,25 +164,12 @@ void runToStop ( void ) {
 }
 
 /*
-  Turn the robot to a specified angle, rotating around its center
-  Can only turn with intervals of 13.79 deg.
+  Turns off all the LEDs
 */
-void goToAngle(int angle){
-  stepperLeft.setCurrentPosition(0);
-  stepperRight.setCurrentPosition(0);
-
-  Serial.println("Go To Angle");
-  //int numSteps = angle / minIntervalAngle;
-  int numSteps = 1000;
-  long positions[2]; // Array of desired stepper positions
-  positions[0] = numSteps; //right motor absolute position
-  positions[1] = -numSteps; //left motor absolute position
-  steppers.moveTo(positions);
-
-  stepperLeft.setSpeed(-leftSpd);//set left motor speed
-  stepperRight.setSpeed(rightSpd);//set right motor speed
-
-  steppers.runSpeedToPosition(); // Blocks until all are in position
+void turnOffLEDs(){
+  digitalWrite(redLED, LOW);
+  digitalWrite(greenLED, LOW);
+  digitalWrite(yellowLED, LOW);
 }
 
 /*
@@ -190,10 +179,13 @@ void goToAngle(int angle){
 */
 
 void moveCircle(int diam, int direction){
+  turnOffLEDs(); // turn off all LEDs
+  digitalWrite(redLED, HIGH); // turn on red LED
+
   stepperLeft.setCurrentPosition(0);
   stepperRight.setCurrentPosition(0);
 
-  Serial.println("Circle");
+  Serial.println("Moving in a circle...");
 
   int totalOuter = diam + WIDTH_OF_BOT_CM; //Outer wheel path diameter in cm
   int totalInner = diam - WIDTH_OF_BOT_CM; //Inner wheel path diameter in cm
@@ -205,6 +197,7 @@ void moveCircle(int diam, int direction){
   int numStepsInner = innerCirc * CM_TO_STEPS_CONV;
 
   int outerWheelSpd = 400; //steps per sec
+  // 1000 speed is possible, results in inaccuracy
 
   int timeToComplete = numStepsOuter/outerWheelSpd; //time it will take the outer wheel to complete path in sec
 
@@ -213,14 +206,14 @@ void moveCircle(int diam, int direction){
   long positions[2]; // Array of desired stepper positions
 
   if(direction > 0){
-  Serial.println("Pivot Left");
+  Serial.println("Circling left");
   positions[0] = numStepsOuter; //right motor absolute position
   positions[1] = numStepsInner; //left motor absolute position
   steppers.moveTo(positions);
   stepperLeft.setSpeed(innerWheelSpd);//set left motor speed
   stepperRight.setSpeed(outerWheelSpd);//set right motor speed
   } else{
-  Serial.println("Pivot Right");
+  Serial.println("Circling right");
   positions[0] = numStepsInner; //right motor absolute position
   positions[1] = numStepsOuter; //left motor absolute position
   steppers.moveTo(positions);
@@ -229,7 +222,85 @@ void moveCircle(int diam, int direction){
   }
 
   steppers.runSpeedToPosition();
+  turnOffLEDs();
+}
 
+void moveFigure8(int diam, int direction){
+  turnOffLEDs();
+  digitalWrite(redLED, HIGH); digitalWrite(yellowLED, HIGH);
+
+  moveCircle(diam, direction);
+  moveCircle(diam, -direction);
+  turnOffLEDs();
+}
+
+/*
+  Turn the robot to a specified angle, rotating around its center
+  Input angle is in degrees.
+*/
+void goToAngle(int angle){
+  turnOffLEDs();
+  digitalWrite(greenLED, HIGH);
+
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  Serial.println("Go To Angle: " + String(angle));
+  
+  double angle_rad = angle*PI/180;
+
+  int numSteps = angle_rad*WIDTH_OF_BOT_CM/2*CM_TO_STEPS_CONV;
+  
+  long positions[2]; // Array of desired stepper positions
+  positions[1] = -numSteps; //left motor position
+  positions[0] = numSteps; //right motor position
+  steppers.moveTo(positions);
+
+  int spinSpeed = 1000;
+  if(numSteps < 0){
+    spinSpeed = -spinSpeed;
+  }
+  stepperLeft.setSpeed(-spinSpeed);//set left motor speed
+  stepperRight.setSpeed(spinSpeed);//set right motor speed
+
+  steppers.runSpeedToPosition(); // Blocks until all are in position
+  turnOffLEDs();
+}
+
+/*
+  Turn robot to an angle, go forward to a particular direction.
+  Input x value is in centimeters.
+  Input y value is in centimeters.
+*/
+void goToGoal(int x, int y){
+  turnOffLEDs();
+  digitalWrite(greenLED, HIGH); digitalWrite(yellowLED, HIGH);
+  
+  Serial.println("Go To Goal");
+  double angle_rad = atan2(y,x);
+  int angle = angle_rad * (180/PI);
+  goToAngle(angle);
+
+  double forwardDistance_cm =  sqrt(sq(x)+sq(y)); // go forward by the hypotenuse
+  forward(forwardDistance_cm);
+  turnOffLEDs();
+}
+
+/*
+  Move the robot in a square shape.
+  Input is length of the sides in CENTIMETERS
+*/
+void moveSquare(int side){
+  turnOffLEDs();
+  digitalWrite(redLED, HIGH); digitalWrite(greenLED, HIGH); digitalWrite(yellowLED, HIGH);
+
+  for(int i = 0; i < 4; i++){
+    forward(side);
+    spin(-1); // spins clockwise, 90 degrees
+  }
+  // TODO: add in encoder functionality
+  
+  turnOffLEDs();
 }
 
 /*
@@ -262,11 +333,7 @@ void pivot(int direction) {
   stepperLeft.setSpeed(leftSpd);//set left motor speed
   stepperRight.setSpeed(rightSpd);//set right motor speed
   }
-  
-
   steppers.runSpeedToPosition();
-
-
 }
 
 /*
@@ -401,20 +468,40 @@ void setup() {
   stop();
   */
   // end of basic functionality demo
-
-  //Begin Circle Demo
-  moveCircle(61, 1);
-  delay(1000);
-  moveCircle(61, -1);
-
-
-  
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
-//print_encoder_data();   //prints encoder data
-  Serial.println("We are looping");
-
+  //print_encoder_data();   //prints encoder data
+  Serial.println("Starting loop...");
   delay(wait_time);               //wait to move robot or read data
+
+  //Begin Loop Demo
+  // circle
+  int circle_diameter_cm = 92;
+  int direction = 1; // left
+  moveCircle(circle_diameter_cm, direction); // turn left
+  delay(wait_time);
+
+  // figure 8
+  moveFigure8(circle_diameter_cm, direction); // start left
+  delay(wait_time);
+
+  // go to angle
+  int angle_deg = 53;
+  goToAngle(angle_deg);
+  delay(wait_time);
+  goToAngle(-angle_deg);
+  delay(wait_time);
+
+  // go to goal
+  float angle_rad = 53* (PI/180);
+  float distance_cm = 152.4;
+  int x_cm = cos(angle_rad)*distance_cm;
+  int y_cm = sin(angle_rad)*distance_cm;
+  goToGoal(x_cm, y_cm);
+
+  // square
+  int side_length_cm = 92;
+  moveSquare(side_length_cm);
 }
