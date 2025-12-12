@@ -204,7 +204,7 @@ void moveCircle(int diam, int direction){
   double timeToComplete = (double)numStepsOuter/outerWheelSpd; //time it will take the outer wheel to complete path in sec. Needs to be a double so they have almost exact same time
   Serial.println("Time to complete this circle ="); Serial.print(" "); Serial.print(timeToComplete);
 
-  int innerWheelSpd = numStepsInner/timeToComplete; //matching up the completion times by setting inner wheel speed
+  double innerWheelSpd = (double)numStepsInner/timeToComplete; //matching up the completion times by setting inner wheel speed
   Serial.println("Inner Wheel Speed ="); Serial.print(" "); Serial.print(innerWheelSpd);
 
   long positions[2]; // Array of desired stepper positions
