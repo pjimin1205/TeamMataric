@@ -399,15 +399,15 @@ void turn(int direction) {
   steppers.runSpeedToPosition(); // Blocks until all are in position
 }
 /*
-  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
+  input distance is in centimeters
 */
 void forward(int distance) {
   Serial.println("Forward");
   stepperLeft.setCurrentPosition(0);
   stepperRight.setCurrentPosition(0);
-
-  stepperLeft.moveTo(distance);//left motor absolute position
-  stepperRight.moveTo(distance);//right motor absolute position
+  distance_step = distance*CM_TO_STEPS_CONV;
+  stepperLeft.moveTo(distance_step);//left motor absolute position
+  stepperRight.moveTo(distance_step);//right motor absolute position
   stepperLeft.setSpeed(200);
   stepperRight.setSpeed(200);
 
