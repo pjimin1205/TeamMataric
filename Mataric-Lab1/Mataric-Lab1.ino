@@ -252,15 +252,16 @@ void goToAngle(int angle){
   Serial.println("Go To Angle: " + String(angle));
   
   double angle_rad = angle*PI/180;
-
+  
   int numSteps = angle_rad*WIDTH_OF_BOT_CM/2*CM_TO_STEPS_CONV;
+  Serial.println(String("numSteps: ")+ numSteps);
   
   long positions[2]; // Array of desired stepper positions
   positions[1] = -numSteps; //left motor position
   positions[0] = numSteps; //right motor position
   steppers.moveTo(positions);
 
-  int spinSpeed = 1000;
+  int spinSpeed = 200;
   if(numSteps < 0){
     spinSpeed = -spinSpeed;
   }
@@ -284,9 +285,13 @@ void goToGoal(int x, int y){
   double angle_rad = atan2(y,x);
   int angle = angle_rad * (180/PI);
   goToAngle(angle);
+  digitalWrite(greenLED, HIGH); digitalWrite(yellowLED, HIGH);
 
   double forwardDistance_cm =  sqrt(sq(x)+sq(y)); // go forward by the hypotenuse
+  double forwardDistance_ft = forwardDistance_cm / 30.48;
+  Serial.println(String("  going forward by ") + forwardDistance_ft + (" ft"));
   forward(forwardDistance_cm);
+  Serial.println("Turning off led's for goal");
   turnOffLEDs();
 }
 
@@ -296,12 +301,15 @@ void goToGoal(int x, int y){
 */
 void moveSquare(int side){
   turnOffLEDs();
+  Serial.println(String("move square: ") + side + "cm");
   digitalWrite(redLED, HIGH); digitalWrite(greenLED, HIGH); digitalWrite(yellowLED, HIGH);
-
-  for(int i = 0; i < 4; i++){
-    forward(side);
-    spin(-1); // spins clockwise, 90 degrees
-  }
+  int indicate_move_square = 2000;
+  delay(indicate_move_square);
+  goToGoal(side, 0);
+  goToGoal(0, -side);
+  goToGoal(0, -side);
+  goToGoal(0, -side);
+  goToAngle(-90);
   // TODO: add in encoder functionality
   
   turnOffLEDs();
@@ -405,7 +413,7 @@ void forward(int distance) {
   Serial.println("Forward");
   stepperLeft.setCurrentPosition(0);
   stepperRight.setCurrentPosition(0);
-  distance_step = distance*CM_TO_STEPS_CONV;
+  int distance_step = distance*CM_TO_STEPS_CONV;
   stepperLeft.moveTo(distance_step);//left motor absolute position
   stepperRight.moveTo(distance_step);//right motor absolute position
   stepperLeft.setSpeed(200);
@@ -518,9 +526,9 @@ void loop() {
   //print_encoder_data();   //prints encoder data
   Serial.println("Starting loop...");
   delay(wait_time);               //wait to move robot or read data
-  int circle_diameter_cm = 92;
+  int circle_diameter_cm = 92; // 3 ft
   int direction = 1; // left
-  /*
+  
   //Begin Loop Demo
   // circle
   moveCircle(circle_diameter_cm, direction); // turn left
@@ -528,24 +536,25 @@ void loop() {
   // figure 8
   moveFigure8(circle_diameter_cm, direction); // start left
   delay(wait_time);
-  */
+  
+  
   // go to angle
-  int angle_deg = 45;
+  int angle_deg = 53;
   goToAngle(angle_deg);
   delay(wait_time);
   goToAngle(-angle_deg);
   delay(wait_time);
-
   /*
   // go to goal
   float angle_rad = 53* (PI/180);
-  float distance_cm = 152.4;
+  float distance_cm = 152.4; // 3 feet
   int x_cm = cos(angle_rad)*distance_cm;
   int y_cm = sin(angle_rad)*distance_cm;
   goToGoal(x_cm, y_cm);
-
-  // square
-  int side_length_cm = 92;
-  moveSquare(side_length_cm);
   */
+  // square
+  delay(wait_time*2);
+  int side_length_cm = 92; // 3 ft
+  moveSquare(side_length_cm);
+  
 }
