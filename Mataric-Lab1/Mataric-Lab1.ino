@@ -53,6 +53,7 @@ int accumTicks[2] = {0, 0};         //variable to hold accumulated ticks since l
 #define STEPS_PER_ROT 800
 #define CM_PER_ROTATION 26.39
 #define CM_TO_STEPS_CONV STEPS_PER_ROT/CM_PER_ROTATION
+#define ENCODER_TICKS_PER_ROTATION 20
 
 // Helper Functions
 
@@ -245,13 +246,17 @@ void moveFigure8(int diam, int direction){
 void goToAngle(int angle){
   turnOffLEDs();
   digitalWrite(greenLED, HIGH);
-
+  encoder[LEFT] = 0;
+  encoder[RIGHT] = 0;
+  
   stepperLeft.setCurrentPosition(0);
   stepperRight.setCurrentPosition(0);
 
   Serial.println("Go To Angle: " + String(angle));
   
   double angle_rad = angle*PI/180;
+  
+  double distanceToTravel = angle_rad*WIDTH_OF_BOT_CM/2;
   
   int numSteps = angle_rad*WIDTH_OF_BOT_CM/2*CM_TO_STEPS_CONV;
   Serial.println(String("numSteps: ")+ numSteps);
@@ -269,15 +274,65 @@ void goToAngle(int angle){
   stepperRight.setSpeed(spinSpeed);//set right motor speed
 
   steppers.runSpeedToPosition(); // Blocks until all are in position
+
+  //check if both encoders have traveled the correct distance
+  int currentLeftTicks = encoder[LEFT]; //how many encoder ticks have passed by
+  int currentRightTicks = encoder[RIGHT];
+
+  int currentLeftSteps = encoderTicksToSteps(currentLeftTicks); //how many steps that have contributed to movement have passed 
+  int currentRightSteps = encoderTicksToSteps(currentRightTicks);
+
+  int leftSteps = num
+
   turnOffLEDs();
+}
+
+/*
+  Helper function for goToGoal
+  Provides the error between the expected distance and actual distance.
+  oves the robot by tthis error amount.
+
+  input di tan ce i.int s in CMENTIMETERS. e
+, th, the forward component distance. ecnatsid lautca dna ecnatsid detcepxe eht neew
+goToGoalErrorCorrection(side);*/
+void goToGoalErrorCorrection(int distance){
+  // get actual encoder distance
+  int actual_steps_left = encoderTicksToSteps(encoder[LEFT]);
+  int actual_steps_right = encoderTicksToSteps(encoder[RIGHT]);
+  // get difference
+  int distance_step = distance*CM_TO_STEPS_CONV; // taken from forward function
+  int diff_left = distance_step - actual_steps_left;
+  int diff_right = distance_step - actual_steps_right;
+  
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+  stepperLeft.moveTo(diff_left);
+  stepperRight.moveTo(diff_right);
+  int l_direction = 1;
+  int r_direction = 1;
+  if(diff_left < 0){
+    l_direction = -1;
+  }
+  if(diff_right < 0){
+    r_direction = -1;
+  }
+  stepperLeft.setSpeed(l_direction*200);
+  stepperRight.setSpeed(r_direction*200);
+
+  steppers.runSpeedToPosition();
 }
 
 /*
   Turn robot to an angle, go forward to a particular direction.
   Input x value is in centimeters.
   Input y value is in centimeters.
+
+  Accounts for odometry error.
 */
 void goToGoal(int x, int y){
+  encoder[LEFT] = 0;
+  encoder[RIGHT] = 0;
+
   turnOffLEDs();
   digitalWrite(greenLED, HIGH); digitalWrite(yellowLED, HIGH);
   
@@ -293,21 +348,30 @@ void goToGoal(int x, int y){
   forward(forwardDistance_cm);
   Serial.println("Turning off led's for goal");
   turnOffLEDs();
+  goToGoalErrorCorrection(forwardDistance_cm);
 }
 
+/*
+  Input is the number of encoder ticks
+*/
+int encoderTicksToSteps(int ticks){
+  int degPerRotation = 360;
+  int steps = ticks*degPerRotation/ENCODER_TICKS_PER_ROTATION*STEPS_PER_ROT*degPerRotation;
+  return (steps);
+}
 /*
   Move the robot in a square shape.
   Input is length of the sides in CENTIMETERS
 */
 void moveSquare(int side){
   turnOffLEDs();
+  encoder[LEFT] = 0;                          //clear the left encoder data buffer
+  encoder[RIGHT] = 0;
   Serial.println(String("move square: ") + side + "cm");
   digitalWrite(redLED, HIGH); digitalWrite(greenLED, HIGH); digitalWrite(yellowLED, HIGH);
   int indicate_move_square = 2000;
   delay(indicate_move_square);
   goToGoal(side, 0);
-  goToGoal(0, -side);
-  goToGoal(0, -side);
   goToGoal(0, -side);
   goToAngle(-90);
   // TODO: add in encoder functionality
@@ -531,12 +595,15 @@ void loop() {
   
   //Begin Loop Demo
   // circle
+  /*
   moveCircle(circle_diameter_cm, direction); // turn left
   delay(wait_time);
+  */
+  /*
   // figure 8
   moveFigure8(circle_diameter_cm, direction); // start left
   delay(wait_time);
-  
+  */
   
   // go to angle
   int angle_deg = 53;
@@ -544,14 +611,12 @@ void loop() {
   delay(wait_time);
   goToAngle(-angle_deg);
   delay(wait_time);
-  /*
   // go to goal
   float angle_rad = 53* (PI/180);
   float distance_cm = 152.4; // 3 feet
   int x_cm = cos(angle_rad)*distance_cm;
   int y_cm = sin(angle_rad)*distance_cm;
   goToGoal(x_cm, y_cm);
-  */
   // square
   delay(wait_time*2);
   int side_length_cm = 92; // 3 ft
