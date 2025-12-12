@@ -187,21 +187,25 @@ void moveCircle(int diam, int direction){
 
   Serial.println("Moving in a circle...");
 
-  int totalOuter = diam + WIDTH_OF_BOT_CM; //Outer wheel path diameter in cm
-  int totalInner = diam - WIDTH_OF_BOT_CM; //Inner wheel path diameter in cm
+  double totalOuter = (double)diam + WIDTH_OF_BOT_CM; //Outer wheel path diameter in cm
+  double totalInner = (double)diam - WIDTH_OF_BOT_CM; //Inner wheel path diameter in cm
 
-  int outerCirc = totalOuter * PI; //Circumference of outerwheel path in cm
-  int innerCirc = totalInner * PI; //Circumference of innerwheel path in cm
+  double outerCirc = totalOuter * PI; //Circumference of outerwheel path in cm
+  double innerCirc = totalInner * PI; //Circumference of innerwheel path in cm
 
   int numStepsOuter = outerCirc * CM_TO_STEPS_CONV; //turn circumference to steps
   int numStepsInner = innerCirc * CM_TO_STEPS_CONV;
+  Serial.println("Outer steps ="); Serial.print(" "); Serial.print(numStepsOuter);
+  Serial.println("Inner steps ="); Serial.print(" "); Serial.print(numStepsInner);
 
   int outerWheelSpd = 400; //steps per sec
   // 1000 speed is possible, results in inaccuracy
 
-  int timeToComplete = numStepsOuter/outerWheelSpd; //time it will take the outer wheel to complete path in sec
+  double timeToComplete = (double)numStepsOuter/outerWheelSpd; //time it will take the outer wheel to complete path in sec. Needs to be a double so they have almost exact same time
+  Serial.println("Time to complete this circle ="); Serial.print(" "); Serial.print(timeToComplete);
 
   int innerWheelSpd = numStepsInner/timeToComplete; //matching up the completion times by setting inner wheel speed
+  Serial.println("Inner Wheel Speed ="); Serial.print(" "); Serial.print(innerWheelSpd);
 
   long positions[2]; // Array of desired stepper positions
 
@@ -432,6 +436,42 @@ void stop() {
   stepperLeft.stop();
   stepperRight.stop();
 }
+/*
+  used in calibration of left motor to map steps to wheel rotations
+
+*/
+void leftMotorCal() {
+  Serial.println("Left Motor Calibration");
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  stepperRight.moveTo(0);
+  stepperRight.setSpeed(0);
+
+  stepperLeft.moveTo(800);
+  stepperLeft.setSpeed(100);
+
+  steppers.runSpeedToPosition();
+
+}
+/*
+  used in calibration of left motor to map steps to wheel rotations
+
+*/
+void rightMotorCal() {
+  Serial.println("Right Motor Calibration");
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  stepperLeft.moveTo(0);
+  stepperLeft.setSpeed(0);
+
+  stepperRight.moveTo(800);
+  stepperRight.setSpeed(100);
+
+  steppers.runSpeedToPosition();
+
+}
 
 void setup() {
   int baudrate = 9600; //serial monitor baud rate'
@@ -448,6 +488,8 @@ void setup() {
   
   // Lab 1 Basic functionality demo
   int demo1PauseTime = 1000;
+  delay(demo1PauseTime);
+  Serial.println(WIDTH_OF_BOT_CM);
   /*
   forward(TWO_FEET_IN_STEPS);
   delay(demo1PauseTime);
@@ -468,6 +510,7 @@ void setup() {
   stop();
   */
   // end of basic functionality demo
+
 }
 
 void loop() {
@@ -475,25 +518,25 @@ void loop() {
   //print_encoder_data();   //prints encoder data
   Serial.println("Starting loop...");
   delay(wait_time);               //wait to move robot or read data
-
-  //Begin Loop Demo
-  // circle
   int circle_diameter_cm = 92;
   int direction = 1; // left
+  /*
+  //Begin Loop Demo
+  // circle
   moveCircle(circle_diameter_cm, direction); // turn left
   delay(wait_time);
-
   // figure 8
   moveFigure8(circle_diameter_cm, direction); // start left
   delay(wait_time);
-
+  */
   // go to angle
-  int angle_deg = 53;
+  int angle_deg = 45;
   goToAngle(angle_deg);
   delay(wait_time);
   goToAngle(-angle_deg);
   delay(wait_time);
 
+  /*
   // go to goal
   float angle_rad = 53* (PI/180);
   float distance_cm = 152.4;
@@ -504,4 +547,5 @@ void loop() {
   // square
   int side_length_cm = 92;
   moveSquare(side_length_cm);
+  */
 }
