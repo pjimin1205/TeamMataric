@@ -274,7 +274,7 @@ void goToAngle(int angle){
   stepperRight.setSpeed(spinSpeed);//set right motor speed
 
   steppers.runSpeedToPosition(); // Blocks until all are in position
-
+  /*
   //check if both encoders have traveled the correct distance
   int currentLeftTicks = encoder[LEFT]; //how many encoder ticks have passed by
   int currentRightTicks = encoder[RIGHT];
@@ -282,8 +282,34 @@ void goToAngle(int angle){
   int currentLeftSteps = encoderTicksToSteps(currentLeftTicks); //how many steps that have contributed to movement have passed 
   int currentRightSteps = encoderTicksToSteps(currentRightTicks);
 
-  int leftSteps = num
+  Serial.println(String("leftTicks:   ")+currentLeftTicks+String(" ticks"));
+  Serial.println(String("rightTicks:  ")+currentRightTicks+String(" ticks"));
 
+
+  int leftStepsToGo = numSteps - currentLeftSteps;
+  int rightStepsToGo = numSteps - currentRightSteps;
+
+  Serial.println(String("leftStepsToGo:   ")+leftStepsToGo+String(" steps"));
+  Serial.println(String("rightStepsToGo:  ")+rightStepsToGo+String(" steps"));
+
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  if(spinSpeed > 0){
+    positions[1] = -leftStepsToGo; //left motor position
+    positions[0] = rightStepsToGo; //right motor position
+    steppers.moveTo(positions);
+  } else {
+    positions[1] = leftStepsToGo; //left motor position
+    positions[0] = -rightStepsToGo; //right motor position
+    steppers.moveTo(positions);
+  }
+
+  stepperLeft.setSpeed(-spinSpeed);//set left motor speed
+  stepperRight.setSpeed(spinSpeed);//set right motor speed
+
+  steppers.runSpeedToPosition(); // Blocks until all are in position
+  */
   turnOffLEDs();
 }
 
@@ -303,7 +329,9 @@ void goToGoalErrorCorrection(int distance){
   int distance_step = distance*CM_TO_STEPS_CONV; // taken from forward function
   int diff_left = distance_step - actual_steps_left;
   int diff_right = distance_step - actual_steps_right;
-  
+  Serial.println(String("diff left:   ")+diff_left+String(" steps"));
+  Serial.println(String("diff right:  ")+diff_left+String(" steps"));
+
   stepperLeft.setCurrentPosition(0);
   stepperRight.setCurrentPosition(0);
   stepperLeft.moveTo(diff_left);
@@ -316,6 +344,8 @@ void goToGoalErrorCorrection(int distance){
   if(diff_right < 0){
     r_direction = -1;
   }
+  Serial.println(String("l direction:  ")+l_direction);
+  Serial.println(String("r direction:  ")+r_direction);
   stepperLeft.setSpeed(l_direction*200);
   stepperRight.setSpeed(r_direction*200);
 
@@ -346,17 +376,21 @@ void goToGoal(int x, int y){
   double forwardDistance_ft = forwardDistance_cm / 30.48;
   Serial.println(String("  going forward by ") + forwardDistance_ft + (" ft"));
   forward(forwardDistance_cm);
+  
+  Serial.println("Starting goToGoal Error Correction...");
+  delay(1000);
+  // goToGoalErrorCorrection(forwardDistance_cm);
+
   Serial.println("Turning off led's for goal");
   turnOffLEDs();
-  goToGoalErrorCorrection(forwardDistance_cm);
 }
 
 /*
   Input is the number of encoder ticks
 */
 int encoderTicksToSteps(int ticks){
-  int degPerRotation = 360;
-  int steps = ticks*degPerRotation/ENCODER_TICKS_PER_ROTATION*STEPS_PER_ROT*degPerRotation;
+  int steps = ticks*STEPS_PER_ROT/ENCODER_TICKS_PER_ROTATION;
+  Serial.println(String("TickstoSteps:  ")+steps+String(" steps"));
   return (steps);
 }
 /*
@@ -587,7 +621,7 @@ void setup() {
 
 void loop() {
   // put your main code here, to run repeatedly:
-  //print_encoder_data();   //prints encoder data
+  print_encoder_data();   //prints encoder data
   Serial.println("Starting loop...");
   delay(wait_time);               //wait to move robot or read data
   int circle_diameter_cm = 92; // 3 ft
@@ -599,24 +633,27 @@ void loop() {
   moveCircle(circle_diameter_cm, direction); // turn left
   delay(wait_time);
   */
-  /*
-  // figure 8
-  moveFigure8(circle_diameter_cm, direction); // start left
-  delay(wait_time);
-  */
   
+  // figure 8
+  // moveFigure8(circle_diameter_cm, direction); // start left
+  // delay(wait_time);
+
   // go to angle
-  int angle_deg = 53;
-  goToAngle(angle_deg);
-  delay(wait_time);
-  goToAngle(-angle_deg);
-  delay(wait_time);
+  // int angle_deg = 53;
+  // goToAngle(angle_deg);
+  // delay(wait_time);
+  // goToAngle(-angle_deg);
+  // delay(wait_time);
+
   // go to goal
-  float angle_rad = 53* (PI/180);
-  float distance_cm = 152.4; // 3 feet
-  int x_cm = cos(angle_rad)*distance_cm;
-  int y_cm = sin(angle_rad)*distance_cm;
-  goToGoal(x_cm, y_cm);
+  // float angle_rad = 53* (PI/180);
+  // float distance_cm = 152.4; // 3 feet
+  // int x_cm = cos(angle_rad)*distance_cm;
+  // int y_cm = sin(angle_rad)*distance_cm;
+  // goToGoal(x_cm, y_cm);
+
+  // goToGoal(-61, -61);
+  
   // square
   delay(wait_time*2);
   int side_length_cm = 92; // 3 ft
