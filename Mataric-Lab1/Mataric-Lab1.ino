@@ -32,8 +32,8 @@ int pauseTime = 2500;   //time before robot moves
 int stepTime = 500;     //delay time between high and low on step pin
 int wait_time = 1000;   //delay for printing data
 
-int minIntervalAngle = 13.79; // degrees
-int leftSpd = 1000;
+int minIntervalAngle = 13.79; // degrees 
+int leftSpd = 1000; // default speed for left and right motors in septs per second
 int rightSpd = 1000;
 
 //define encoder pins
@@ -46,14 +46,15 @@ int lastSpeed[2] = {0, 0};          //variable to hold encoder speed (left, righ
 int accumTicks[2] = {0, 0};         //variable to hold accumulated ticks since last reset
 
 // Constant Vars
-#define INCHES_TO_CM 2.54
-#define TWO_FEET_IN_STEPS 1848
-#define WIDTH_OF_BOT_CM 21.2
-#define WHEEL_DIAM_CM 8.4
-#define STEPS_PER_ROT 800
-#define CM_PER_ROTATION 26.39
-#define CM_TO_STEPS_CONV STEPS_PER_ROT/CM_PER_ROTATION
-#define ENCODER_TICKS_PER_ROTATION 20
+#define INCHES_TO_CM 2.54 //conversion factor from inches to centimeters
+#define TWO_FEET_IN_STEPS 1848 //number of steps to move robot forward 2 feet
+#define WIDTH_OF_BOT_CM 21.2 //width of robot in centimeters, distance between wheels center to center
+#define WHEEL_DIAM_CM 8.4 // wheel diameter in centimeters
+#define STEPS_PER_ROT 800 //number of steps per wheel rotation
+#define CM_PER_ROTATION 26.39 //circumference of wheel in centimeters
+#define CM_TO_STEPS_CONV STEPS_PER_ROT/CM_PER_ROTATION //conversion factor from centimeters to steps
+#define ENCODER_TICKS_PER_ROTATION 20 //number of encoder ticks per wheel rotation
+#define CM_PER_FOOT 30.48 // number of centimeters in a foot
 
 // Helper Functions
 
@@ -66,7 +67,9 @@ void LwheelSpeed() {
 void RwheelSpeed() {
   encoder[RIGHT] ++; //count the right wheel encoder interrupts
 }
-
+/*
+  Turns off all the state LEDs
+*/
 void allOFF(){
   for (int i = 0;i<3;i++){
     digitalWrite(leds[i],LOW);
@@ -177,6 +180,7 @@ void turnOffLEDs(){
   direction is either -1 or 1
   circle left is 1
   circle right is -1
+  diameter is in centimeters
 */
 
 void moveCircle(int diam, int direction){
@@ -230,6 +234,11 @@ void moveCircle(int diam, int direction){
   turnOffLEDs();
 }
 
+
+/*
+  Move the robot in a figure 8 shape.
+  Input is diameter of circles in CENTIMETERS
+*/
 void moveFigure8(int diam, int direction){
   turnOffLEDs();
   digitalWrite(redLED, HIGH); digitalWrite(yellowLED, HIGH);
@@ -346,8 +355,8 @@ void goToGoalErrorCorrection(int distance){
   }
   Serial.println(String("l direction:  ")+l_direction);
   Serial.println(String("r direction:  ")+r_direction);
-  stepperLeft.setSpeed(l_direction*200);
-  stepperRight.setSpeed(r_direction*200);
+  stepperLeft.setSpeed(l_direction*leftSpd);
+  stepperRight.setSpeed(r_direction*rightSpd);
 
   steppers.runSpeedToPosition();
 }
@@ -357,7 +366,7 @@ void goToGoalErrorCorrection(int distance){
   Input x value is in centimeters.
   Input y value is in centimeters.
 
-  Accounts for odometry error.
+  Accounts for odometry error. (unimplemented)
 */
 void goToGoal(int x, int y){
   encoder[LEFT] = 0;
@@ -373,7 +382,7 @@ void goToGoal(int x, int y){
   digitalWrite(greenLED, HIGH); digitalWrite(yellowLED, HIGH);
 
   double forwardDistance_cm =  sqrt(sq(x)+sq(y)); // go forward by the hypotenuse
-  double forwardDistance_ft = forwardDistance_cm / 30.48;
+  double forwardDistance_ft = forwardDistance_cm / CM_PER_FOOT;
   Serial.println(String("  going forward by ") + forwardDistance_ft + (" ft"));
   forward(forwardDistance_cm);
   
@@ -471,7 +480,6 @@ void spin(int direction) {
 }
 
 /*
-  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
   Direction is -1 or 1
   Turn left is 1
   Turn right is -1
@@ -505,6 +513,7 @@ void turn(int direction) {
   steppers.runSpeedToPosition(); // Blocks until all are in position
 }
 /*
+  moves the robot forward by a specified distance
   input distance is in centimeters
 */
 void forward(int distance) {
@@ -514,13 +523,14 @@ void forward(int distance) {
   int distance_step = distance*CM_TO_STEPS_CONV;
   stepperLeft.moveTo(distance_step);//left motor absolute position
   stepperRight.moveTo(distance_step);//right motor absolute position
-  stepperLeft.setSpeed(200);
-  stepperRight.setSpeed(200);
+  stepperLeft.setSpeed(leftSpd);
+  stepperRight.setSpeed(rightSpd);
 
   steppers.runSpeedToPosition();
 }
 /*
-  INSERT DESCRIPTION HERE, what are the inputs, what does it do, functions used
+  moves the robot backwards by a specified distance
+  input distance is in centimeters
 */
 void reverse(int distance) {
   Serial.println("Reverse");
@@ -529,8 +539,8 @@ void reverse(int distance) {
 
   stepperLeft.moveTo(-distance);//left motor absolute position
   stepperRight.moveTo(-distance);//right motor absolute position
-  stepperLeft.setSpeed(-200);
-  stepperRight.setSpeed(-200);
+  stepperLeft.setSpeed(-leftSpd);
+  stepperRight.setSpeed(-rightSpd);
 
   steppers.runSpeedToPosition();
 }
@@ -544,18 +554,19 @@ void stop() {
 }
 /*
   used in calibration of left motor to map steps to wheel rotations
-
 */
 void leftMotorCal() {
   Serial.println("Left Motor Calibration");
+  int testingSpeed = 100;
+  int testingSteps = 800;
   stepperLeft.setCurrentPosition(0);
   stepperRight.setCurrentPosition(0);
 
   stepperRight.moveTo(0);
   stepperRight.setSpeed(0);
 
-  stepperLeft.moveTo(800);
-  stepperLeft.setSpeed(100);
+  stepperLeft.moveTo(testingSteps);
+  stepperLeft.setSpeed(testingSpeed);
 
   steppers.runSpeedToPosition();
 
@@ -566,14 +577,16 @@ void leftMotorCal() {
 */
 void rightMotorCal() {
   Serial.println("Right Motor Calibration");
+  int testingSpeed = 100;
+  int testingSteps = 800;
   stepperLeft.setCurrentPosition(0);
   stepperRight.setCurrentPosition(0);
 
   stepperLeft.moveTo(0);
   stepperLeft.setSpeed(0);
 
-  stepperRight.moveTo(800);
-  stepperRight.setSpeed(100);
+  stepperRight.moveTo(testingSteps);
+  stepperRight.setSpeed(testingSpeed);
 
   steppers.runSpeedToPosition();
 
@@ -620,7 +633,6 @@ void setup() {
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
   print_encoder_data();   //prints encoder data
   Serial.println("Starting loop...");
   delay(wait_time);               //wait to move robot or read data
@@ -629,33 +641,31 @@ void loop() {
   
   //Begin Loop Demo
   // circle
-  /*
   moveCircle(circle_diameter_cm, direction); // turn left
   delay(wait_time);
-  */
+
   
   // figure 8
-  // moveFigure8(circle_diameter_cm, direction); // start left
-  // delay(wait_time);
+  moveFigure8(circle_diameter_cm, direction); // start left
+  delay(wait_time);
 
   // go to angle
-  // int angle_deg = 53;
-  // goToAngle(angle_deg);
-  // delay(wait_time);
-  // goToAngle(-angle_deg);
-  // delay(wait_time);
+  int angle_deg = 53;
+  goToAngle(angle_deg);
+  delay(wait_time);
+  goToAngle(-angle_deg);
+  delay(wait_time);
 
   // go to goal
-  // float angle_rad = 53* (PI/180);
-  // float distance_cm = 152.4; // 3 feet
-  // int x_cm = cos(angle_rad)*distance_cm;
-  // int y_cm = sin(angle_rad)*distance_cm;
-  // goToGoal(x_cm, y_cm);
+  float angle_rad = 53* (PI/180);
+  float distance_cm = 152.4; // 3 feet
+  int x_cm = cos(angle_rad)*distance_cm;
+  int y_cm = sin(angle_rad)*distance_cm;
+  goToGoal(x_cm, y_cm);
 
-  // goToGoal(-61, -61);
   
   // square
-  delay(wait_time*2);
+  delay(wait_time);
   int side_length_cm = 92; // 3 ft
   moveSquare(side_length_cm);
   
