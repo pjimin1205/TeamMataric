@@ -188,8 +188,9 @@ void goToGoal(int x, int y){
   Serial.println("Turning off led's for goal");
   turnOffLEDs();
 }
+
 /*
-  moves the robot forward by a specified distance
+  Moves the robot forward by a specified distance
   input distance is in centimeters
 */
 void forward(int distance) {
@@ -205,11 +206,34 @@ void forward(int distance) {
   steppers.runSpeedToPosition();
 }
 
+/*
+  Makes the robot wander randomly.
+  The maximum distance it'll wander in one motion is 30 cm.
+  The maximum angle the robot will rotate is by 180 deg to the left or right.
+  
+  There are no inputs.
+*/
 void randomWander(){
-  getRandomNumber();
+  turnOffLEDs();
+  digitalWrite(greenLED, HIGH);
+  randomAngle = getRandomNumber(360); // max of 360 deg
+  randomDistance = getRandomNumber(30); // maximum of 30 cm
+  // make robot turn other way if angle is over 180 degrees
+  if(randomAngle > 180){
+    randomAngle = -1*(randomAngle - 180);
+  }
+  goToAngle(randomAngle);
+  forward(randomDistance);
 }
-private int getRandomNumber(){
-  maxVal = 1000; //maximum value for random number
+
+/*
+  This function generates a random number.
+  This function is called by the randomWander function.
+
+  This input is maxVal, the maximum value of the randomly generated number.
+  This outputs a random number.
+*/
+private int getRandomNumber(int maxVal){
   randomSeed(analogRead(0)); //generate a new random number
   randNumber = random(maxVal); //uses random number
 }
@@ -230,9 +254,9 @@ void setup() {
 }
 
 void loop() {
-  print_encoder_data();   //prints encoder data
   Serial.println("Starting loop...");
-  delay(wait_time);               //wait to move robot or read data
-  int circle_diameter_cm = 92; // 3 ft
-  int direction = 1; // left
+  // delay(wait_time);               //wait to move robot or read data
+  // int circle_diameter_cm = 92; // 3 ft
+  // int direction = 1; // left
+  randomWander();
 }
