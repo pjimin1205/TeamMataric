@@ -36,6 +36,16 @@ int minIntervalAngle = 13.79; // degrees
 int leftSpd = 1000; // default speed for left and right motors in septs per second
 int rightSpd = 1000;
 
+//define encoder pins
+#define LEFT 0        //left encoder
+#define RIGHT 1       //right encoder
+const int ltEncoder = 18;        //left encoder pin (Mega Interrupt pins 2,3 18,19,20,21)
+const int rtEncoder = 19;        //right encoder pin (Mega Interrupt pins 2,3 18,19,20,21)
+volatile long encoder[2] = {0, 0};  //interrupt variable to hold number of encoder counts (left, right)
+int lastSpeed[2] = {0, 0};          //variable to hold encoder speed (left, right)
+int accumTicks[2] = {0, 0};         //variable to hold accumulated ticks since last reset
+
+
 // Constant Vars
 #define INCHES_TO_CM 2.54 //conversion factor from inches to centimeters
 #define TWO_FEET_IN_STEPS 1848 //number of steps to move robot forward 2 feet
@@ -47,6 +57,14 @@ int rightSpd = 1000;
 #define ENCODER_TICKS_PER_ROTATION 20 //number of encoder ticks per wheel rotation
 #define CM_PER_FOOT 30.48 // number of centimeters in a foot
 
+//interrupt function to count left encoder tickes
+void LwheelSpeed() {
+  encoder[LEFT] ++;  //count the left wheel encoder interrupts
+}
+//interrupt function to count right encoder ticks
+void RwheelSpeed() {
+  encoder[RIGHT] ++; //count the right wheel encoder interrupts
+}
 //function to set all stepper motor variables, outputs and LEDs
 void init_stepper(){
   pinMode(rtStepPin, OUTPUT);//sets pin as output
@@ -207,6 +225,18 @@ void forward(int distance) {
 }
 
 /*
+  This function generates a random number.
+  This function is called by the randomWander function.
+
+  This input is maxVal, the maximum value of the randomly generated number.
+  This outputs a random number.
+*/
+int getRandomNumber(int minVal, int maxVal){
+  randomSeed(analogRead(0)); //generate a new random number
+  int randNumber = random(minVal, maxVal); //uses random number
+}
+
+/*
   Makes the robot wander randomly.
   The maximum distance it'll wander in one motion is 30 cm.
   The maximum angle the robot will rotate is by 180 deg to the left or right.
@@ -216,26 +246,14 @@ void forward(int distance) {
 void randomWander(){
   turnOffLEDs();
   digitalWrite(greenLED, HIGH);
-  randomAngle = getRandomNumber(360); // max of 360 deg
-  randomDistance = getRandomNumber(30); // maximum of 30 cm
+  int randomAngle = getRandomNumber(15, 360); // min of 15 deg, max of 360 deg
+  int randomDistance = getRandomNumber(15, 50); // min of 15 cm, maximum of 50 cm
   // make robot turn other way if angle is over 180 degrees
   if(randomAngle > 180){
     randomAngle = -1*(randomAngle - 180);
   }
   goToAngle(randomAngle);
   forward(randomDistance);
-}
-
-/*
-  This function generates a random number.
-  This function is called by the randomWander function.
-
-  This input is maxVal, the maximum value of the randomly generated number.
-  This outputs a random number.
-*/
-private int getRandomNumber(int maxVal){
-  randomSeed(analogRead(0)); //generate a new random number
-  randNumber = random(maxVal); //uses random number
 }
 
 void setup() {
