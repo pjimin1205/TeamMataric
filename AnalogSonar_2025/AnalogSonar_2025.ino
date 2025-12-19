@@ -4,8 +4,8 @@
 
 #include "Arduino.h"
 
-#define leftSnr 7
-#define rightSnr 6
+#define leftSnr 4
+#define rightSnr 3
 #define baudrate 9600
 #define num_of_samples 5
 #define delayUs 20  //delay betwen readings
