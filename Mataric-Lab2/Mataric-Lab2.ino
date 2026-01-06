@@ -36,6 +36,9 @@ int minIntervalAngle = 13.79; // degrees
 int leftSpd = 1000; // default speed for left and right motors in septs per second
 int rightSpd = 1000;
 
+int leftSonarDist = 1000; // default left sonar distance
+int rightSonarDist = 1000; // default right sonar distance
+
 //define encoder pins
 #define LEFT 0        //left encoder
 #define RIGHT 1       //right encoder
@@ -48,12 +51,11 @@ int accumTicks[2] = {0, 0};         //variable to hold accumulated ticks since l
 // Analog sonar
 #define leftSnrPin 4
 #define rightSnrPin 3
-const int OBSTACLE_THRESHOLD = 10;   // cm
 volatile int sonarDistance = 1000; // previous sonar distance, default is 1000 cm
 volatile bool obstacleDetected = false;
 
 // Behavior constants
-const int OBSTACLE_THRESHOLD = 25;   // cm - detection threshold
+const int OBSTACLE_THRESHOLD = 10;   // cm - detection threshold
 const int SAFE_DISTANCE = 40;        // cm - desired safe distance
 const float K_REPULSIVE = 800.0;     // Repulsive force constant
 const int MAX_FORCE = 100;           // Maximum force magnitude
@@ -77,7 +79,7 @@ enum BehaviorMode {
   FOLLOW_MODE,     // Curious kid: follows object at target distance
   RANDOM_WANDER    // Random wander behavior
 };
-BehaviorMode currentMode = RUNAWAY_MODE;  // Change this to switch behaviors
+BehaviorMode currentMode = COLLIDE_MODE;  // Change this to switch behaviors
 
 // State machine for non-blocking runaway behavior
 enum RunawayState {
@@ -178,6 +180,13 @@ void turnOffLEDs(){
   digitalWrite(yellowLED, LOW);
 }
 // MOTOR FUNCTIONS
+/*
+  Stops both left and right motors.
+*/
+void stop(){
+  stepperRight.stop();
+  stepperLeft.stop();
+}
 /*function to run both wheels to a position at speed*/
 void runAtSpeedToPosition() {
   stepperRight.runSpeedToPosition();
@@ -287,17 +296,34 @@ int getRandomNumber(int minVal, int maxVal){
   return random(minVal, maxVal);
 }
 
-void updateSonarNonBlocking() {
+// reads a sonar given a pin
+int read_sonar(int pin) {
+  float velocity((331.5 + 0.6 * (float)(20)) * 100 / 1000000.0);
+  uint16_t distance, pulseWidthUs;
+  pinMode(pin, OUTPUT);
+  digitalWrite(pin, LOW);
+  digitalWrite(pin, HIGH);            //Set the trig pin High
+  delayMicroseconds(10);              //Delay of 10 microseconds
+  digitalWrite(pin, LOW);             //Set the trig pin Low
+  pinMode(pin, INPUT);                //Set the pin to input mode
+  pulseWidthUs = pulseIn(pin, HIGH);  //Detect the high level time on the echo pin, the output high level time represents the ultrasonic flight time (unit: us)
+  distance = pulseWidthUs * velocity / 2.0;
+  if (distance < 0 || distance > 50) { distance = 0; }
+  return distance;
+}
+
+/*
+  Update both left and right sonars.
+*/
+void updateSonarReadings() {
   static unsigned long lastSampleTime = 0;
   const unsigned long SAMPLE_PERIOD = 50; // ms (20 Hz)
 
   unsigned long now = millis();
   if (now - lastSampleTime >= SAMPLE_PERIOD) {
     lastSampleTime = now;
-    int raw = analogRead(sonarPin);  // fast (~100 microsec)
-    // Convert analog reading to distance (example — adjust!)
-    sonarDistance = map(raw, 0, 1023, 200, 0);
-    obstacleDetected = (sonarDistance <= OBSTACLE_THRESHOLD);
+    leftSonarDist = read_sonar(leftSnrPin);
+    rightSonarDist = read_sonar(rightSnrPin);
   }
 }
 
@@ -331,7 +357,7 @@ void randomWander(){
 void collideBehavior() {
   updateSonarReadings();
   // Check if obstacle is detected on either sensor
-  bool obstacleDetected = (sonarLeft < OBSTACLE_THRESHOLD) || (sonarRight < OBSTACLE_THRESHOLD);
+  obstacleDetected = (leftSonarDist < OBSTACLE_THRESHOLD) || (rightSonarDist < OBSTACLE_THRESHOLD);
   
   if (obstacleDetected) {
     stop(); // STOP immediately when obstacle detected
@@ -339,11 +365,11 @@ void collideBehavior() {
     digitalWrite(yellowLED, LOW);
     digitalWrite(greenLED, LOW);
     
-    Serial.print("COLLIDE: Obstacle! L:");
-    Serial.print(sonarLeft);
-    Serial.print("cm R:");
-    Serial.print(sonarRight);
-    Serial.println("cm");
+    // Serial.print("COLLIDE: Obstacle! L:");
+    // Serial.print(leftSonarDist);
+    // Serial.print("cm R:");
+    // Serial.print(rightSonarDist);
+    // Serial.println("cm");
   } else {
     // No obstacle - drive forward continuously
     digitalWrite(redLED, HIGH);
@@ -375,8 +401,8 @@ void computeRepulsiveVector(float &Fx, float &Fy) {
   Fx = 0;
   Fy = 0;
   // Get forces from each sensor
-  float fL = repulsiveForce(sonarLeft);
-  float fR = repulsiveForce(sonarRight);
+  float fL = repulsiveForce(leftSonarDist);
+  float fR = repulsiveForce(rightSonarDist);
   // Convert to Cartesian coordinates (robot frame: x=forward, y=left)
   // Repulsive forces point AWAY from obstacles
   Fx -= fL * cos(radians(ANGLE_LEFT));
@@ -405,6 +431,35 @@ bool detectOscillation(int currentAngle) {
   lastAngle = currentAngle;
   return (oscillationCount >= OSCILLATION_THRESHOLD);
 }
+// NON-BLOCKING turn function
+void turnNonBlocking(int angle) {
+  if (abs(angle) < 5) return;
+  
+  double angle_rad = angle * PI / 180.0;
+  int numSteps = angle_rad * WIDTH_OF_BOT_CM / 2.0 * CM_TO_STEPS_CONV;
+  
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+  stepperLeft.moveTo(-numSteps);
+  stepperRight.moveTo(numSteps);
+  
+  int spinSpeed = 500;
+  if(numSteps < 0) spinSpeed = -spinSpeed;
+  
+  stepperLeft.setSpeed(-spinSpeed);
+  stepperRight.setSpeed(spinSpeed);
+}
+// NON-BLOCKING forward function
+void forwardNonBlocking(int distance) {
+  int distance_step = distance * CM_TO_STEPS_CONV;
+  
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+  stepperLeft.moveTo(distance_step);
+  stepperRight.moveTo(distance_step);
+  stepperLeft.setSpeed(leftSpd);
+  stepperRight.setSpeed(rightSpd);
+}
 
 void runawayBehavior() {
   updateSonarReadings();
@@ -413,8 +468,8 @@ void runawayBehavior() {
   computeRepulsiveVector(Fx, Fy);
   float magnitude = sqrt(Fx*Fx + Fy*Fy);
   
-  bool obstacleNearby = (sonarLeft < OBSTACLE_THRESHOLD) || 
-                        (sonarRight < OBSTACLE_THRESHOLD);
+  bool obstacleNearby = (leftSonarDist < OBSTACLE_THRESHOLD) || 
+                        (rightSonarDist < OBSTACLE_THRESHOLD);
   
   switch(runawayState) {
     case RUNAWAY_IDLE:
@@ -494,7 +549,7 @@ void followBehavior() {
   updateSonarReadings();
   
   // Get minimum distance (closest object)
-  int minDistance = min(sonarLeft, sonarRight);
+  int minDistance = min(leftSonarDist, rightSonarDist);
   
   // Check if object is detected within range
   bool objectDetected = (minDistance < FOLLOW_DETECT_THRESHOLD);
@@ -519,7 +574,7 @@ void followBehavior() {
   
   // Calculate steering error (difference between left and right sensors)
   // Negative = object on left, Positive = object on right
-  float steeringError = sonarRight - sonarLeft;
+  float steeringError = rightSonarDist - leftSonarDist;
   
   // Proportional control for forward/backward speed
   float baseSpeed = KP_DISTANCE * distanceError;
@@ -570,9 +625,9 @@ void followBehavior() {
 
 
 void printSensorData() {
-  Serial.print(sonarLeft);
+  Serial.print(leftSonarDist);
   Serial.print(",");
-  Serial.println(sonarRight);
+  Serial.println(rightSonarDist);
 }
 
 void setup() {
@@ -610,5 +665,5 @@ void loop() {
   } else if (currentMode == RANDOM_WANDER) {
     randomWander(); // RANDOM WANDER: Wanders randomly
   }
-  // printSensorData();
+  printSensorData();
 }
