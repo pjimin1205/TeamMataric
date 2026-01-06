@@ -7,8 +7,7 @@
 #define frontLdr 8
 #define backLdr 9
 #define leftLdr 10
-#define rightLdr 11
-#define led 12
+#define rightLdr 12
 
 void setup() {
   Serial.begin(9600);

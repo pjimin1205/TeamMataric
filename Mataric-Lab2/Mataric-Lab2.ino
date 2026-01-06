@@ -54,6 +54,16 @@ int accumTicks[2] = {0, 0};         //variable to hold accumulated ticks since l
 volatile int sonarDistance = 1000; // previous sonar distance, default is 1000 cm
 volatile bool obstacleDetected = false;
 
+// Lidar sensors
+#define frontLdr 8
+#define backLdr 9
+#define leftLdr 10
+#define rightLdr 12
+int frontLidarDist; // front lidar distance
+int backLidarDist; // front lidar distance
+int leftLidarDist; // front lidar distance
+int rightLidarDist; // front lidar distance
+
 // Behavior constants
 const int OBSTACLE_THRESHOLD = 10;   // cm - detection threshold
 const int SAFE_DISTANCE = 40;        // cm - desired safe distance
@@ -62,11 +72,14 @@ const int MAX_FORCE = 100;           // Maximum force magnitude
 const int MAX_SPEED = 800;           // Maximum speed for runaway
 
 // Sensor angles relative to robot (degrees)
-// Assuming sensors are mounted at an angle on front corners
-const float ANGLE_LEFT = 45.0;       // Left sensor at 45 degrees
-const float ANGLE_RIGHT = -45.0;     // Right sensor at -45 degrees
+const float ANGLE_LEFT_SONAR = 45.0;     // Left sonar at 45 degrees
+const float ANGLE_RIGHT_SONAR = -45.0;   // Right sonar at -45 degrees
+const float ANGLE_FRONT_LIDAR = 0.0;     // Front LIDAR at 0 degrees
+const float ANGLE_BACK_LIDAR = 180.0;    // Back LIDAR at 180 degrees
+const float ANGLE_LEFT_LIDAR = 90.0;     // Left LIDAR at 90 degrees
+const float ANGLE_RIGHT_LIDAR = -90.0;   // Right LIDAR at -90 degrees
 
-// Local minima escape
+// Local minima detection
 unsigned long lastMoveTime = 0;
 int lastAngle = 0;
 int oscillationCount = 0;
@@ -79,7 +92,7 @@ enum BehaviorMode {
   FOLLOW_MODE,     // Curious kid: follows object at target distance
   RANDOM_WANDER    // Random wander behavior
 };
-BehaviorMode currentMode = COLLIDE_MODE;  // Change this to switch behaviors
+BehaviorMode currentMode = RUNAWAY_MODE;  // Change this to switch behaviors
 
 // State machine for non-blocking runaway behavior
 enum RunawayState {
@@ -179,7 +192,7 @@ void turnOffLEDs(){
   digitalWrite(greenLED, LOW);
   digitalWrite(yellowLED, LOW);
 }
-// MOTOR FUNCTIONS
+// ----------------- MOTOR FUNCTIONS -----------------------------------
 /*
   Stops both left and right motors.
 */
@@ -295,7 +308,17 @@ int getRandomNumber(int minVal, int maxVal){
   randomSeed(analogRead(A0));
   return random(minVal, maxVal);
 }
-
+/*
+  reads a lidar given a pin
+  Returns a distance value in cm
+*/
+int read_lidar(int pin) {
+  int d;
+  int16_t t = pulseIn(pin, HIGH, 25000); // 25 ms timeout to prevent blocking
+  d = (t - 1000) * 3 / 40;
+  if (t == 0 || t > 1850 || d < 0) { d = 0; }
+  return d;
+}
 // reads a sonar given a pin
 int read_sonar(int pin) {
   float velocity((331.5 + 0.6 * (float)(20)) * 100 / 1000000.0);
@@ -326,8 +349,48 @@ void updateSonarReadings() {
     rightSonarDist = read_sonar(rightSnrPin);
   }
 }
+/*
+  Updates the distance values of each of the lidar sensors.
+  reads all 4 sensors at intervals for non-blocking.
+*/
+void updateLidarReadings() {
+  // static makes it initialize only once, retains previous value on next iterations
+  static unsigned long lastSampleTime = 0;
+  static int sensorIndex = 0; // Which sensor to read next
+  const unsigned long SAMPLE_PERIOD = 10; // Read one sensor every 100ms
 
-
+  unsigned long now = millis();
+  if (now - lastSampleTime >= SAMPLE_PERIOD) {
+    lastSampleTime = now;
+    
+    // Read one sensor at a time to minimize blocking
+    switch(sensorIndex) {
+      case 0:
+        frontLidarDist = read_lidar(frontLdr);
+        Serial.print("F:");
+        Serial.print(frontLidarDist);
+        break;
+      case 1:
+        backLidarDist = read_lidar(backLdr);
+        Serial.print(" B:");
+        Serial.print(backLidarDist);
+        break;
+      case 2:
+        leftLidarDist = read_lidar(leftLdr);
+        Serial.print(" L:");
+        Serial.print(leftLidarDist);
+        break;
+      case 3:
+        rightLidarDist = read_lidar(rightLdr);
+        Serial.print(" R:");
+        Serial.println(rightLidarDist);
+        break;
+    }
+    
+    // Move to next sensor (cycle through 0-3)
+    sensorIndex = (sensorIndex + 1) % 4;
+  }
+}
 /*
   Makes the robot wander randomly.
   The maximum distance it'll wander in one motion is 30 cm.
@@ -335,6 +398,7 @@ void updateSonarReadings() {
   
   There are no inputs.
 */
+// ------------------ random wanderer behavior -----------------------------
 void randomWander(){
   turnOffLEDs();
   digitalWrite(greenLED, HIGH);
@@ -347,7 +411,7 @@ void randomWander(){
   goToAngle(randomAngle);
   forward(randomDistance);
 }
-
+// --------------------- collide behavior ----------------------------------
 /*
   Robot drives until it encounters an obstacle.
   Robot stops when an obstacle is detected and continues moving when the object is removed.
@@ -355,9 +419,24 @@ void randomWander(){
   Turns on the red LED when executing this behavior.
 */
 void collideBehavior() {
-  updateSonarReadings();
   // Check if obstacle is detected on either sensor
-  obstacleDetected = (leftSonarDist < OBSTACLE_THRESHOLD) || (rightSonarDist < OBSTACLE_THRESHOLD);
+  int sensorType = 0;
+  // if(leftSonarDist < OBSTACLE_THRESHOLD){
+  //   obstacleDetected = true;
+  //   sensorType = 1;
+  // }
+  // else if(rightSonarDist < OBSTACLE_THRESHOLD){
+  //   obstacleDetected = true;
+  //   sensorType = 2;
+  // }
+  if(frontLidarDist < OBSTACLE_THRESHOLD && frontLidarDist > 0){
+    obstacleDetected = true;
+    sensorType = 3;
+  }
+  else{
+    obstacleDetected = false;
+  }
+  // obstacleDetected = (leftSonarDist < OBSTACLE_THRESHOLD) || (rightSonarDist < OBSTACLE_THRESHOLD) || (frontLidarDistance < OBSTACLE_THRESHOLD);
   
   if (obstacleDetected) {
     stop(); // STOP immediately when obstacle detected
@@ -365,11 +444,16 @@ void collideBehavior() {
     digitalWrite(yellowLED, LOW);
     digitalWrite(greenLED, LOW);
     
-    // Serial.print("COLLIDE: Obstacle! L:");
-    // Serial.print(leftSonarDist);
-    // Serial.print("cm R:");
-    // Serial.print(rightSonarDist);
-    // Serial.println("cm");
+    Serial.print("COLLIDE: Obstacle! ");
+    if(sensorType == 1){
+      Serial.println("left sonar: " + String(leftSonarDist) + " cm");
+    }
+    else if(sensorType == 2){
+      Serial.println("right sonar: " + String(rightSonarDist) + " cm");
+    }
+    else if(sensorType == 3){
+      Serial.println("front lidar: " + String(frontLidarDist) + " cm");
+    }
   } else {
     // No obstacle - drive forward continuously
     digitalWrite(redLED, HIGH);
@@ -386,39 +470,76 @@ void collideBehavior() {
   }
 }
 
-// Run Away behavior
-
+// ----------------- Run Away behavior -------------------------------------
 // Calculate repulsive force from a single sensor
 float repulsiveForce(int distance) {
-  if (distance > OBSTACLE_THRESHOLD) return 0;
+  if (distance <= 0 || distance > OBSTACLE_THRESHOLD) return 0;
   // Inverse square law with safe distance
   float force = K_REPULSIVE / (distance * distance + 1);
   return constrain(force, 0, MAX_FORCE);
 }
 
-// Compute the repulsive vector from both sensors
+/*
+  Compute the repulsive vector from both sensors.
+  Passes input by reference, changing Fx, Fy will change the original.
+  Reference is used because we want to return two values from one function.
+*/
 void computeRepulsiveVector(float &Fx, float &Fy) {
   Fx = 0;
   Fy = 0;
-  // Get forces from each sensor
-  float fL = repulsiveForce(leftSonarDist);
-  float fR = repulsiveForce(rightSonarDist);
-  // Convert to Cartesian coordinates (robot frame: x=forward, y=left)
-  // Repulsive forces point AWAY from obstacles
-  Fx -= fL * cos(radians(ANGLE_LEFT));
-  Fy -= fL * sin(radians(ANGLE_LEFT));
-
-  Fx -= fR * cos(radians(ANGLE_RIGHT));
-  Fy -= fR * sin(radians(ANGLE_RIGHT));
+  // Get forces from each sonar
+  float fLeftSonar = repulsiveForce(leftSonarDist);
+  float fRightSonar = repulsiveForce(rightSonarDist);
+  // get forces from each lidar
+  float fFrontLidar = repulsiveForce(frontLidarDist);
+  float fBackLidar = repulsiveForce(backLidarDist);
+  float fLeftLidar = repulsiveForce(leftLidarDist);
+  float fRightLidar = repulsiveForce(rightLidarDist);
   
-  Serial.print("Forces - L:");
-  Serial.print(fL);
-  Serial.print(" R:");
-  Serial.print(fR);
-  Serial.print(" | Vector - Fx:");
-  Serial.print(Fx);
-  Serial.print(" Fy:");
-  Serial.println(Fy);
+  // SONAR contributions (diagonal sensors)
+  Fx -= fLeftSonar * cos(radians(ANGLE_LEFT_SONAR));
+  Fy -= fLeftSonar * sin(radians(ANGLE_LEFT_SONAR));
+  
+  Fx -= fRightSonar * cos(radians(ANGLE_RIGHT_SONAR));
+  Fy -= fRightSonar * sin(radians(ANGLE_RIGHT_SONAR));
+  
+  // LIDAR contributions (cardinal directions)
+  Fx -= fFrontLidar * cos(radians(ANGLE_FRONT_LIDAR));  // Front pushes back
+  Fy -= fFrontLidar * sin(radians(ANGLE_FRONT_LIDAR));
+  
+  Fx -= fBackLidar * cos(radians(ANGLE_BACK_LIDAR));    // Back pushes forward
+  Fy -= fBackLidar * sin(radians(ANGLE_BACK_LIDAR));
+  
+  Fx -= fLeftLidar * cos(radians(ANGLE_LEFT_LIDAR));    // Left pushes right
+  Fy -= fLeftLidar * sin(radians(ANGLE_LEFT_LIDAR));
+  
+  Fx -= fRightLidar * cos(radians(ANGLE_RIGHT_LIDAR));  // Right pushes left
+  Fy -= fRightLidar * sin(radians(ANGLE_RIGHT_LIDAR));
+  
+  
+  // Debug output - show all forces and resulting vector
+  // Serial.print("Forces | ");
+  // Serial.print("LS:");
+  // Serial.print(fLeftSonar, 2);
+  // Serial.print(" RS:");
+  // Serial.print(fRightSonar, 2);
+  // Serial.print(" FL:");
+  // Serial.print(fFrontLidar, 2);
+  // Serial.print(" BL:");
+  // Serial.print(fBackLidar, 2);
+  // Serial.print(" LL:");
+  // Serial.print(fLeftLidar, 2);
+  // Serial.print(" RL:");
+  // Serial.print(fRightLidar, 2);
+
+  // Serial.print(" || Vector | Fx:");
+  // Serial.print(Fx, 2);
+  // Serial.print(" Fy:");
+  // Serial.println(Fy, 2);
+
+ 
+
+  
 }
 // Detect if robot is oscillating (stuck in local minima)
 bool detectOscillation(int currentAngle) {
@@ -433,7 +554,7 @@ bool detectOscillation(int currentAngle) {
 }
 // NON-BLOCKING turn function
 void turnNonBlocking(int angle) {
-  if (abs(angle) < 5) return;
+  if (abs(angle) < 5) return; // ignores small angles
   
   double angle_rad = angle * PI / 180.0;
   int numSteps = angle_rad * WIDTH_OF_BOT_CM / 2.0 * CM_TO_STEPS_CONV;
@@ -449,6 +570,7 @@ void turnNonBlocking(int angle) {
   stepperLeft.setSpeed(-spinSpeed);
   stepperRight.setSpeed(spinSpeed);
 }
+
 // NON-BLOCKING forward function
 void forwardNonBlocking(int distance) {
   int distance_step = distance * CM_TO_STEPS_CONV;
@@ -462,28 +584,30 @@ void forwardNonBlocking(int distance) {
 }
 
 void runawayBehavior() {
-  updateSonarReadings();
-  
+  // calculate repulsive force field from all sensors
   float Fx, Fy;
   computeRepulsiveVector(Fx, Fy);
   float magnitude = sqrt(Fx*Fx + Fy*Fy);
   
-  bool obstacleNearby = (leftSonarDist < OBSTACLE_THRESHOLD) || 
-                        (rightSonarDist < OBSTACLE_THRESHOLD);
+  // check for any obstacles nearby (any sensor)
+  bool obstacleNearby = (leftSonarDist > 0 && leftSonarDist < OBSTACLE_THRESHOLD) || 
+                        (rightSonarDist > 0 && rightSonarDist < OBSTACLE_THRESHOLD) ||
+                        (frontLidarDist > 0 && frontLidarDist < OBSTACLE_THRESHOLD) ||
+                        (backLidarDist > 0 && backLidarDist < OBSTACLE_THRESHOLD) ||
+                        (leftLidarDist > 0 && leftLidarDist < OBSTACLE_THRESHOLD) ||
+                        (rightLidarDist > 0 && rightLidarDist < OBSTACLE_THRESHOLD);
   
   switch(runawayState) {
-    case RUNAWAY_IDLE:
-      if (magnitude > 0.1 && obstacleNearby) {
-        // Obstacle detected - start turning away
+    case RUNAWAY_IDLE: // robot sits still
+      if (magnitude > 0.1 && obstacleNearby) { // Obstacle detected - start turning away
         digitalWrite(yellowLED, HIGH);
         digitalWrite(greenLED, LOW);
         digitalWrite(redLED, LOW);
-        
+        // calculate escape angle from force vectors
         float turnAngle = atan2(Fy, Fx) * 180.0 / PI;
         
-        // Check for oscillation
-        if (detectOscillation(turnAngle)) {
-          // Escape local minima with random turn
+        if (detectOscillation(turnAngle)) { // if oscillating
+          // Escape local minima with random large turn
           digitalWrite(redLED, HIGH);
           randomSeed(analogRead(A0));
           int escapeAngle = random(90, 180);
@@ -491,6 +615,7 @@ void runawayBehavior() {
           turnNonBlocking(escapeAngle);
           oscillationCount = 0;
         } else {
+          // normal escape - turn towards calculated escape angle
           turnNonBlocking(turnAngle);
         }
         
@@ -505,16 +630,24 @@ void runawayBehavior() {
         digitalWrite(redLED, LOW);
         stop();
         oscillationCount = 0;
+        
+        // print runaway status
+        static unsigned long lastPrint = 0;
+        if (millis() - lastPrint > 1000) {
+          Serial.println("RUNAWAY: Idle, waiting...");
+          lastPrint = millis();
+        }
       }
       break;
       
-    case RUNAWAY_TURNING:
+    case RUNAWAY_TURNING: // robot is turning away from obstacles
       // Non-blocking turn
       if (stepperLeft.runSpeed() | stepperRight.runSpeed()) {
         // Still turning
       } else {
         // Turn complete - start moving forward
-        int escapeDistance = map(magnitude, 0, MAX_FORCE, 10, 40);
+          // convert force magnitude (0-100) to distance (10-40 cm)
+        int escapeDistance = map(magnitude, 0, MAX_FORCE, 10, 40); // cm
         escapeDistance = constrain(escapeDistance, 10, 40);
         forwardNonBlocking(escapeDistance);
         
@@ -529,9 +662,18 @@ void runawayBehavior() {
     case RUNAWAY_MOVING:
       // Non-blocking forward movement
       if (stepperLeft.runSpeed() | stepperRight.runSpeed()) {
-        // Still moving
+        // Still moving - check for NEW obstacles appearing
+        float newFx, newFy;
+        computeRepulsiveVector(newFx, newFy);
+        float newMagnitude = sqrt(newFx*newFx + newFy*newFy);
+        
+        if (newMagnitude > magnitude * 1.5) {
+          // NEW threat detected while moving! Return to idle to reassess
+          Serial.println("RUNAWAY: New threat detected during move!");
+          runawayState = RUNAWAY_IDLE;
+        }
       } else {
-        // Movement complete - return to idle
+        // Movement complete - return to idle state
         Serial.println("RUNAWAY: Move complete, back to idle");
         runawayState = RUNAWAY_IDLE;
       }
@@ -539,17 +681,17 @@ void runawayBehavior() {
   }
 }
 
-// Follow behavior
+// --------------------- Follow behavior --------------------------------------
 // FOLLOW BEHAVIOR (Curious Kid) - NON-BLOCKING with Proportional Control
 // Robot follows object at target distance using proportional control
 // Speeds up when object moves away, slows down when object approaches
 // Uses steering to keep object centered
 // YELLOW + GREEN LEDs indicate active following
-void followBehavior() {
-  updateSonarReadings();
-  
+void followBehavior() {  
   // Get minimum distance (closest object)
-  int minDistance = min(leftSonarDist, rightSonarDist);
+  int minDistance = leftSonarDist;
+  if (rightSonarDist < minDistance) minDistance = rightSonarDist;
+  if (frontLidarDist < minDistance) minDistance = frontLidarDist;
   
   // Check if object is detected within range
   bool objectDetected = (minDistance < FOLLOW_DETECT_THRESHOLD);
@@ -625,9 +767,14 @@ void followBehavior() {
 
 
 void printSensorData() {
-  Serial.print(leftSonarDist);
-  Serial.print(",");
-  Serial.println(rightSonarDist);
+  Serial.print("left sonar: " + String(leftSonarDist));
+  Serial.print(", ");
+  Serial.println("right sonar: "+ String(rightSonarDist));
+  Serial.print("lidar F: "+String(frontLidarDist));
+  Serial.print(", B: " + String(backLidarDist));
+  Serial.print(", L: " + String(leftLidarDist));
+  Serial.println(", R: " + String(rightLidarDist));
+
 }
 
 void setup() {
@@ -638,6 +785,11 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(rtEncoder), RwheelSpeed, CHANGE);   //init the interrupt mode for the right encoder
 
   Serial.begin(baudrate);     //start serial monitor communication
+  
+  pinMode(frontLdr, OUTPUT);
+  pinMode(backLdr, OUTPUT);
+  pinMode(leftLdr, OUTPUT);
+  pinMode(rightLdr, OUTPUT);
   
   Serial.println("Robot starting...Put ON TEST STAND");
   Serial.print("Behavior Mode: ");
@@ -652,8 +804,8 @@ void setup() {
 }
 
 void loop() {
-  // Serial.println("Starting loop...");
-  // randomWander();
+  updateSonarReadings();
+  updateLidarReadings();
   
   // Robot continuously reads sensors and reacts in real-time
   if (currentMode == COLLIDE_MODE) {
