@@ -45,6 +45,55 @@ volatile long encoder[2] = {0, 0};  //interrupt variable to hold number of encod
 int lastSpeed[2] = {0, 0};          //variable to hold encoder speed (left, right)
 int accumTicks[2] = {0, 0};         //variable to hold accumulated ticks since last reset
 
+// Analog sonar
+#define leftSnrPin 4
+#define rightSnrPin 3
+const int OBSTACLE_THRESHOLD = 10;   // cm
+volatile int sonarDistance = 1000; // previous sonar distance, default is 1000 cm
+volatile bool obstacleDetected = false;
+
+// Behavior constants
+const int OBSTACLE_THRESHOLD = 25;   // cm - detection threshold
+const int SAFE_DISTANCE = 40;        // cm - desired safe distance
+const float K_REPULSIVE = 800.0;     // Repulsive force constant
+const int MAX_FORCE = 100;           // Maximum force magnitude
+const int MAX_SPEED = 800;           // Maximum speed for runaway
+
+// Sensor angles relative to robot (degrees)
+// Assuming sensors are mounted at an angle on front corners
+const float ANGLE_LEFT = 45.0;       // Left sensor at 45 degrees
+const float ANGLE_RIGHT = -45.0;     // Right sensor at -45 degrees
+
+// Local minima escape
+unsigned long lastMoveTime = 0;
+int lastAngle = 0;
+int oscillationCount = 0;
+const int OSCILLATION_THRESHOLD = 4;
+
+// Behavior modes
+enum BehaviorMode {
+  COLLIDE_MODE,    // Aggressive kid: drives forward, stops at obstacle
+  RUNAWAY_MODE,    // Shy kid: sits still, runs away when approached
+  FOLLOW_MODE,     // Curious kid: follows object at target distance
+  RANDOM_WANDER    // Random wander behavior
+};
+BehaviorMode currentMode = RUNAWAY_MODE;  // Change this to switch behaviors
+
+// State machine for non-blocking runaway behavior
+enum RunawayState {
+  RUNAWAY_IDLE,      // Sitting still
+  RUNAWAY_TURNING,   // Turning away
+  RUNAWAY_MOVING     // Moving forward
+};
+RunawayState runawayState = RUNAWAY_IDLE;
+
+// Follow behavior constants
+const int TARGET_FOLLOW_DISTANCE = 20;  // cm - desired distance from object
+const float KP_DISTANCE = 15.0;          // Proportional gain for distance control
+const float KP_STEERING = 3.0;           // Proportional gain for steering
+const int MIN_FOLLOW_SPEED = 100;        // Minimum motor speed
+const int MAX_FOLLOW_SPEED = 800;        // Maximum motor speed
+const int FOLLOW_DETECT_THRESHOLD = 50;  // cm - max distance to detect object to follow
 
 // Constant Vars
 #define INCHES_TO_CM 2.54 //conversion factor from inches to centimeters
@@ -56,6 +105,8 @@ int accumTicks[2] = {0, 0};         //variable to hold accumulated ticks since l
 #define CM_TO_STEPS_CONV STEPS_PER_ROT/CM_PER_ROTATION //conversion factor from centimeters to steps
 #define ENCODER_TICKS_PER_ROTATION 20 //number of encoder ticks per wheel rotation
 #define CM_PER_FOOT 30.48 // number of centimeters in a foot
+
+#define DEFAULT_SPEED 500 // default motor speed
 
 //interrupt function to count left encoder tickes
 void LwheelSpeed() {
@@ -232,9 +283,24 @@ void forward(int distance) {
   This outputs a random number.
 */
 int getRandomNumber(int minVal, int maxVal){
-  randomSeed(analogRead(0)); //generate a new random number
-  int randNumber = random(minVal, maxVal); //uses random number
+  randomSeed(analogRead(A0));
+  return random(minVal, maxVal);
 }
+
+void updateSonarNonBlocking() {
+  static unsigned long lastSampleTime = 0;
+  const unsigned long SAMPLE_PERIOD = 50; // ms (20 Hz)
+
+  unsigned long now = millis();
+  if (now - lastSampleTime >= SAMPLE_PERIOD) {
+    lastSampleTime = now;
+    int raw = analogRead(sonarPin);  // fast (~100 microsec)
+    // Convert analog reading to distance (example — adjust!)
+    sonarDistance = map(raw, 0, 1023, 200, 0);
+    obstacleDetected = (sonarDistance <= OBSTACLE_THRESHOLD);
+  }
+}
+
 
 /*
   Makes the robot wander randomly.
@@ -248,12 +314,265 @@ void randomWander(){
   digitalWrite(greenLED, HIGH);
   int randomAngle = getRandomNumber(15, 360); // min of 15 deg, max of 360 deg
   int randomDistance = getRandomNumber(15, 50); // min of 15 cm, maximum of 50 cm
-  // make robot turn other way if angle is over 180 degrees
-  if(randomAngle > 180){
-    randomAngle = -1*(randomAngle - 180);
+
+  if (abs(randomAngle) < 15) {
+    randomAngle = (randomAngle < 0) ? -15 : 15;
   }
   goToAngle(randomAngle);
   forward(randomDistance);
+}
+
+/*
+  Robot drives until it encounters an obstacle.
+  Robot stops when an obstacle is detected and continues moving when the object is removed.
+  Robot should stop without hitting the object.
+  Turns on the red LED when executing this behavior.
+*/
+void collideBehavior() {
+  updateSonarReadings();
+  // Check if obstacle is detected on either sensor
+  bool obstacleDetected = (sonarLeft < OBSTACLE_THRESHOLD) || (sonarRight < OBSTACLE_THRESHOLD);
+  
+  if (obstacleDetected) {
+    stop(); // STOP immediately when obstacle detected
+    digitalWrite(redLED, HIGH);
+    digitalWrite(yellowLED, LOW);
+    digitalWrite(greenLED, LOW);
+    
+    Serial.print("COLLIDE: Obstacle! L:");
+    Serial.print(sonarLeft);
+    Serial.print("cm R:");
+    Serial.print(sonarRight);
+    Serial.println("cm");
+  } else {
+    // No obstacle - drive forward continuously
+    digitalWrite(redLED, HIGH);
+    digitalWrite(yellowLED, LOW);
+    digitalWrite(greenLED, LOW);
+    
+    // Set continuous forward motion
+    stepperLeft.setSpeed(leftSpd);
+    stepperRight.setSpeed(rightSpd);
+    
+    // Run motors non-blocking
+    stepperLeft.runSpeed();
+    stepperRight.runSpeed();
+  }
+}
+
+// Run Away behavior
+
+// Calculate repulsive force from a single sensor
+float repulsiveForce(int distance) {
+  if (distance > OBSTACLE_THRESHOLD) return 0;
+  // Inverse square law with safe distance
+  float force = K_REPULSIVE / (distance * distance + 1);
+  return constrain(force, 0, MAX_FORCE);
+}
+
+// Compute the repulsive vector from both sensors
+void computeRepulsiveVector(float &Fx, float &Fy) {
+  Fx = 0;
+  Fy = 0;
+  // Get forces from each sensor
+  float fL = repulsiveForce(sonarLeft);
+  float fR = repulsiveForce(sonarRight);
+  // Convert to Cartesian coordinates (robot frame: x=forward, y=left)
+  // Repulsive forces point AWAY from obstacles
+  Fx -= fL * cos(radians(ANGLE_LEFT));
+  Fy -= fL * sin(radians(ANGLE_LEFT));
+
+  Fx -= fR * cos(radians(ANGLE_RIGHT));
+  Fy -= fR * sin(radians(ANGLE_RIGHT));
+  
+  Serial.print("Forces - L:");
+  Serial.print(fL);
+  Serial.print(" R:");
+  Serial.print(fR);
+  Serial.print(" | Vector - Fx:");
+  Serial.print(Fx);
+  Serial.print(" Fy:");
+  Serial.println(Fy);
+}
+// Detect if robot is oscillating (stuck in local minima)
+bool detectOscillation(int currentAngle) {
+  if (abs(currentAngle - lastAngle) > 150) {
+    oscillationCount++;
+  } else {
+    oscillationCount = 0;
+  }
+  
+  lastAngle = currentAngle;
+  return (oscillationCount >= OSCILLATION_THRESHOLD);
+}
+
+void runawayBehavior() {
+  updateSonarReadings();
+  
+  float Fx, Fy;
+  computeRepulsiveVector(Fx, Fy);
+  float magnitude = sqrt(Fx*Fx + Fy*Fy);
+  
+  bool obstacleNearby = (sonarLeft < OBSTACLE_THRESHOLD) || 
+                        (sonarRight < OBSTACLE_THRESHOLD);
+  
+  switch(runawayState) {
+    case RUNAWAY_IDLE:
+      if (magnitude > 0.1 && obstacleNearby) {
+        // Obstacle detected - start turning away
+        digitalWrite(yellowLED, HIGH);
+        digitalWrite(greenLED, LOW);
+        digitalWrite(redLED, LOW);
+        
+        float turnAngle = atan2(Fy, Fx) * 180.0 / PI;
+        
+        // Check for oscillation
+        if (detectOscillation(turnAngle)) {
+          // Escape local minima with random turn
+          digitalWrite(redLED, HIGH);
+          randomSeed(analogRead(A0));
+          int escapeAngle = random(90, 180);
+          if (random(0, 2) == 0) escapeAngle = -escapeAngle;
+          turnNonBlocking(escapeAngle);
+          oscillationCount = 0;
+        } else {
+          turnNonBlocking(turnAngle);
+        }
+        
+        Serial.print("RUNAWAY: Turning away, angle: ");
+        Serial.println(turnAngle);
+        
+        runawayState = RUNAWAY_TURNING;
+      } else {
+        // No obstacle - sit still
+        digitalWrite(yellowLED, LOW);
+        digitalWrite(greenLED, LOW);
+        digitalWrite(redLED, LOW);
+        stop();
+        oscillationCount = 0;
+      }
+      break;
+      
+    case RUNAWAY_TURNING:
+      // Non-blocking turn
+      if (stepperLeft.runSpeed() | stepperRight.runSpeed()) {
+        // Still turning
+      } else {
+        // Turn complete - start moving forward
+        int escapeDistance = map(magnitude, 0, MAX_FORCE, 10, 40);
+        escapeDistance = constrain(escapeDistance, 10, 40);
+        forwardNonBlocking(escapeDistance);
+        
+        Serial.print("RUNAWAY: Moving forward ");
+        Serial.print(escapeDistance);
+        Serial.println("cm");
+        
+        runawayState = RUNAWAY_MOVING;
+      }
+      break;
+      
+    case RUNAWAY_MOVING:
+      // Non-blocking forward movement
+      if (stepperLeft.runSpeed() | stepperRight.runSpeed()) {
+        // Still moving
+      } else {
+        // Movement complete - return to idle
+        Serial.println("RUNAWAY: Move complete, back to idle");
+        runawayState = RUNAWAY_IDLE;
+      }
+      break;
+  }
+}
+
+// Follow behavior
+// FOLLOW BEHAVIOR (Curious Kid) - NON-BLOCKING with Proportional Control
+// Robot follows object at target distance using proportional control
+// Speeds up when object moves away, slows down when object approaches
+// Uses steering to keep object centered
+// YELLOW + GREEN LEDs indicate active following
+void followBehavior() {
+  updateSonarReadings();
+  
+  // Get minimum distance (closest object)
+  int minDistance = min(sonarLeft, sonarRight);
+  
+  // Check if object is detected within range
+  bool objectDetected = (minDistance < FOLLOW_DETECT_THRESHOLD);
+  
+  if (!objectDetected) {
+    // No object detected - HALT (collide behavior)
+    stop();
+    digitalWrite(redLED, HIGH);
+    digitalWrite(yellowLED, LOW);
+    digitalWrite(greenLED, LOW);
+    
+    Serial.println("FOLLOW: No object detected - HALTED");
+    return;
+  }
+  // Object detected - FOLLOW with proportional control
+  digitalWrite(redLED, LOW);
+  digitalWrite(yellowLED, HIGH);  // Curious kid active
+  digitalWrite(greenLED, HIGH);   // Curious kid active
+  
+  // Calculate distance error (negative = too close, positive = too far)
+  float distanceError = minDistance - TARGET_FOLLOW_DISTANCE;
+  
+  // Calculate steering error (difference between left and right sensors)
+  // Negative = object on left, Positive = object on right
+  float steeringError = sonarRight - sonarLeft;
+  
+  // Proportional control for forward/backward speed
+  float baseSpeed = KP_DISTANCE * distanceError;
+  baseSpeed = constrain(baseSpeed, -MAX_FOLLOW_SPEED, MAX_FOLLOW_SPEED);
+  
+  // Proportional control for steering correction
+  float steeringCorrection = KP_STEERING * steeringError;
+  steeringCorrection = constrain(steeringCorrection, -200, 200);
+  
+  // Calculate differential motor speeds for steering while moving
+  float leftSpeed = baseSpeed - steeringCorrection;
+  float rightSpeed = baseSpeed + steeringCorrection;
+  
+  // Apply minimum speed threshold (deadband for small errors)
+  if (abs(distanceError) < 3) { // Within acceptable range - stop
+    leftSpeed = 0;
+    rightSpeed = 0;
+  } else {
+    // Ensure minimum speed when moving
+    if (leftSpeed > 0 && leftSpeed < MIN_FOLLOW_SPEED) leftSpeed = MIN_FOLLOW_SPEED;
+    if (leftSpeed < 0 && leftSpeed > -MIN_FOLLOW_SPEED) leftSpeed = -MIN_FOLLOW_SPEED;
+    if (rightSpeed > 0 && rightSpeed < MIN_FOLLOW_SPEED) rightSpeed = MIN_FOLLOW_SPEED;
+    if (rightSpeed < 0 && rightSpeed > -MIN_FOLLOW_SPEED) rightSpeed = -MIN_FOLLOW_SPEED;
+  }
+  
+  // Constrain speeds to motor limits
+  leftSpeed = constrain(leftSpeed, -MAX_FOLLOW_SPEED, MAX_FOLLOW_SPEED);
+  rightSpeed = constrain(rightSpeed, -MAX_FOLLOW_SPEED, MAX_FOLLOW_SPEED);
+  
+  // Apply speeds to motors (non-blocking)
+  stepperLeft.setSpeed(leftSpeed);
+  stepperRight.setSpeed(rightSpeed);
+  stepperLeft.runSpeed();
+  stepperRight.runSpeed();
+  
+  // Debug output
+  Serial.print("FOLLOW: Dist=");
+  Serial.print(minDistance);
+  Serial.print("cm Error=");
+  Serial.print(distanceError);
+  Serial.print("cm SteerErr=");
+  Serial.print(steeringError);
+  Serial.print(" | Spd L=");
+  Serial.print(leftSpeed);
+  Serial.print(" R=");
+  Serial.println(rightSpeed);
+}
+
+
+void printSensorData() {
+  Serial.print(sonarLeft);
+  Serial.print(",");
+  Serial.println(sonarRight);
 }
 
 void setup() {
@@ -263,18 +582,33 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ltEncoder), LwheelSpeed, CHANGE);    //init the interrupt mode for the left encoder
   attachInterrupt(digitalPinToInterrupt(rtEncoder), RwheelSpeed, CHANGE);   //init the interrupt mode for the right encoder
 
-
   Serial.begin(baudrate);     //start serial monitor communication
-
+  
   Serial.println("Robot starting...Put ON TEST STAND");
-  delay(pauseTime); //always wait 2.5 seconds before the robot moves
-
+  Serial.print("Behavior Mode: ");
+  if (currentMode == COLLIDE_MODE) {
+    Serial.println("COLLIDE (Aggressive Kid) - RED LED");
+  } else if (currentMode == RUNAWAY_MODE) {
+    Serial.println("RUNAWAY (Shy Kid) - YELLOW LED");
+  } else {
+    Serial.println("RANDOM WANDER - GREEN LED");
+  }
+  delay(pauseTime);
 }
 
 void loop() {
-  Serial.println("Starting loop...");
-  // delay(wait_time);               //wait to move robot or read data
-  // int circle_diameter_cm = 92; // 3 ft
-  // int direction = 1; // left
-  randomWander();
+  // Serial.println("Starting loop...");
+  // randomWander();
+  
+  // Robot continuously reads sensors and reacts in real-time
+  if (currentMode == COLLIDE_MODE) {
+    collideBehavior(); // COLLIDE: Drives forward, stops immediately when obstacle detected
+  } else if (currentMode == RUNAWAY_MODE) {
+    runawayBehavior(); // RUNAWAY: Sits still, runs away using potential fields when approached
+  } else if (currentMode == FOLLOW_MODE) {
+    followBehavior(); // FOLLOW: Curious kid follows object at target distance with proportional control
+  } else if (currentMode == RANDOM_WANDER) {
+    randomWander(); // RANDOM WANDER: Wanders randomly
+  }
+  // printSensorData();
 }
