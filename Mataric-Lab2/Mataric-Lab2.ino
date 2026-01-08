@@ -92,7 +92,7 @@ enum BehaviorMode {
   FOLLOW_MODE,     // Curious kid: follows object at target distance
   RANDOM_WANDER    // Random wander behavior
 };
-BehaviorMode currentMode = RUNAWAY_MODE;  // Change this to switch behaviors
+BehaviorMode currentMode = FOLLOW_MODE;  // Change this to switch behaviors
 
 // State machine for non-blocking runaway behavior
 enum RunawayState {
@@ -103,8 +103,8 @@ enum RunawayState {
 RunawayState runawayState = RUNAWAY_IDLE;
 
 // Follow behavior constants
-const int TARGET_FOLLOW_DISTANCE = 20;  // cm - desired distance from object
-const float KP_DISTANCE = 15.0;          // Proportional gain for distance control
+const int TARGET_FOLLOW_DISTANCE = 10;  // cm - desired distance from object
+const float KP_DISTANCE = 50.0;          // Proportional gain for distance control
 const float KP_STEERING = 3.0;           // Proportional gain for steering
 const int MIN_FOLLOW_SPEED = 100;        // Minimum motor speed
 const int MAX_FOLLOW_SPEED = 800;        // Maximum motor speed
@@ -720,7 +720,7 @@ void followBehavior() {
   
   // Proportional control for forward/backward speed
   float baseSpeed = KP_DISTANCE * distanceError;
-  baseSpeed = constrain(baseSpeed, -MAX_FOLLOW_SPEED, MAX_FOLLOW_SPEED);
+  baseSpeed = constrain(baseSpeed, 0, MAX_FOLLOW_SPEED);
   
   // Proportional control for steering correction
   float steeringCorrection = KP_STEERING * steeringError;
@@ -743,8 +743,8 @@ void followBehavior() {
   }
   
   // Constrain speeds to motor limits
-  leftSpeed = constrain(leftSpeed, -MAX_FOLLOW_SPEED, MAX_FOLLOW_SPEED);
-  rightSpeed = constrain(rightSpeed, -MAX_FOLLOW_SPEED, MAX_FOLLOW_SPEED);
+  leftSpeed = constrain(leftSpeed, 0, MAX_FOLLOW_SPEED);
+  rightSpeed = constrain(rightSpeed, 0, MAX_FOLLOW_SPEED);
   
   // Apply speeds to motors (non-blocking)
   stepperLeft.setSpeed(leftSpeed);
