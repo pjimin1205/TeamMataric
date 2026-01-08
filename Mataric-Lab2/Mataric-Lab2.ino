@@ -115,7 +115,8 @@ const int FOLLOW_DETECT_THRESHOLD = 50;  // cm - max distance to detect object t
 enum SmartWanderState {
   SW_WANDERING,     // GREEN LED - randomly wander
   SW_COLLIDE,       // RED LED - obstacle detected, stopped
-  SW_AVOIDING       // YELLOW LED - avoiding obstacle
+  SW_AVOIDING,      // YELLOW LED - avoiding obstacle
+  SW_FOLLOWING      // GREEN + YELLOW LED - follow obstacle
 };
 
 SmartWanderState smartWanderState = SW_WANDERING;
@@ -1012,11 +1013,25 @@ void smartWanderStateMachine() {
           break;
       }
       break;
+    case SW_FOLLOWING:
+      // GREEN + YELLOW LEDs on
+      turnOffLEDs();
+      digitalWrite(greenLED, HIGH);
+      digitalWrite(yellowLED, HIGH);
+
+      // Reuse EXISTING follow behavior
+      followBehavior();
+
+      // If obstacle is lost, return to wandering
+      if (checkClearOfObstacles()) {
+        Serial.println("STATE TRANSITION: SW_FOLLOWING -> SW_WANDERING");
+        smartWanderState = SW_WANDERING;
+        wanderMoving = false;
+        lastWanderTime = millis();
+      }
+      break;
   }
 }
-// ========================================= Smart Follow Behavior ===================================
-
-
 // ===================================== Main Loop ===================================================
 /*
   Printing helper function that prints the data as the function is called
