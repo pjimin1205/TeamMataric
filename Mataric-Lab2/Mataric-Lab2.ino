@@ -98,7 +98,7 @@ BehaviorMode currentMode = FOLLOW_MODE;  // Change this to switch behaviors
 enum RunawayState {
   RUNAWAY_IDLE,      // Sitting still
   RUNAWAY_TURNING,   // Turning away
-  RUNAWAY_MOVING     // Moving forward
+  RUNAWAY_MOVING,     // Moving forward
   SMART_WANDER_MODE  // Smart wander with state machine (wander -> collide -> avoid)
 };
 RunawayState runawayState = RUNAWAY_IDLE;
@@ -128,6 +128,12 @@ const int CLEAR_DISTANCE = 35;       // cm - distance to be considered "clear" o
 unsigned long lastWanderTime = 0;
 const unsigned long WANDER_INTERVAL = 3000; // Change direction every 3 seconds
 bool wanderMoving = false;
+
+enum WanderMotion {
+  WANDER_TURN,
+  WANDER_FORWARD
+};
+WanderMotion wanderMotion;
 
 // Avoid behavior variables
 enum AvoidState {
@@ -830,7 +836,7 @@ void smartWanderStateMachine() {
   
   switch(smartWanderState) {
     
-    case SW_WANDERING:
+    case SW_WANDERING: {
       // GREEN LED on while wandering
       turnOffLEDs();
       digitalWrite(greenLED, HIGH);
@@ -868,31 +874,29 @@ void smartWanderStateMachine() {
       
       // Continue executing the wander move
       if (wanderMoving) {
-        // Check if turn is complete
-        if (stepperLeft.distanceToGo() == 0 && stepperRight.distanceToGo() == 0) {
-          // If we just finished turning, start moving forward
-          if (stepperLeft.targetPosition() != 0) {
-            // Start forward movement
+        bool moving = stepperLeft.runSpeed() | stepperRight.runSpeed();
+
+        if (!moving) {
+          if (wanderMotion == WANDER_TURN) { // Turn just finished, start forward
             int wanderDistance = getRandomNumber(20, 40);
             int distance_step = wanderDistance * CM_TO_STEPS_CONV;
+
             stepperLeft.setCurrentPosition(0);
             stepperRight.setCurrentPosition(0);
             stepperLeft.moveTo(distance_step);
             stepperRight.moveTo(distance_step);
             stepperLeft.setSpeed(500);
             stepperRight.setSpeed(500);
-          } else {
-            // Movement complete
+
+            wanderMotion = WANDER_FORWARD;
+          }
+          else if (wanderMotion == WANDER_FORWARD) { // Forward just finished, wander complete
             wanderMoving = false;
             lastWanderTime = currentTime;
           }
-        } else {
-          // Continue moving
-          stepperLeft.runSpeed();
-          stepperRight.runSpeed();
         }
       }
-      
+
       // Check for obstacle in danger distance
       if (checkObstacleInDanger()) {
         Serial.println("STATE TRANSITION: SW_WANDERING -> SW_COLLIDE");
@@ -901,7 +905,7 @@ void smartWanderStateMachine() {
         wanderMoving = false; // Reset wander flag
       }
       break;
-      
+    }
     case SW_COLLIDE:
       // RED LED on when obstacle detected
       stop();
@@ -909,10 +913,8 @@ void smartWanderStateMachine() {
       digitalWrite(redLED, HIGH);
       
       Serial.println("SW_COLLIDE: Obstacle detected in danger zone!");
-      
-      // Immediately transition to avoidance
-      smartWanderState = SW_AVOIDING;
-      avoidState = AVOID_TURNING; // Reset avoid state machine
+      smartWanderState = SW_AVOIDING; // Immediately transition to avoidance
+      avoidState = AVOID_TURNING; // Reset avoid state machine - tells state to start turning
       Serial.println("STATE TRANSITION: SW_COLLIDE -> SW_AVOIDING");
       break;
       
@@ -923,77 +925,75 @@ void smartWanderStateMachine() {
       
       switch(avoidState) {
         case AVOID_TURNING:
-          // If this is the first time in this state, set up the turn
-          if (stepperLeft.distanceToGo() == 0 && stepperRight.distanceToGo() == 0) {
-            // Get obstacle direction and turn away from it
-            float obstacleAngle = getObstacleDirection();
-            int avoidTurnAngle;
-            
-            // Turn away from obstacle (opposite direction)
-            if (obstacleAngle >= 0) {
-              // Obstacle on right or front-right, turn left
-              avoidTurnAngle = getRandomNumber(60, 120);
-            } else {
-              // Obstacle on left or front-left, turn right
-              avoidTurnAngle = -getRandomNumber(60, 120);
+          static bool turnInitialized = false;
+
+          if (!turnInitialized) {
+            float Fx, Fy;
+            computeRepulsiveVector(Fx, Fy);
+
+            float magnitude = sqrt(Fx*Fx + Fy*Fy);
+
+            // Escape angle (point AWAY from obstacles)
+            float escapeAngle = atan2(Fy, Fx) * 180.0 / PI;
+
+            // Handle oscillation (reuse your existing logic)
+            if (detectOscillation(escapeAngle)) {
+              int randomEscape = getRandomNumber(90, 180);
+              if (random(0, 2) == 0) randomEscape = -randomEscape;
+              escapeAngle = randomEscape;
+              oscillationCount = 0;
             }
-            
-            // Set up turn
-            double angle_rad = avoidTurnAngle * PI / 180.0;
-            int numSteps = angle_rad * WIDTH_OF_BOT_CM / 2.0 * CM_TO_STEPS_CONV;
-            
-            stepperLeft.setCurrentPosition(0);
-            stepperRight.setCurrentPosition(0);
-            stepperLeft.moveTo(-numSteps);
-            stepperRight.moveTo(numSteps);
-            
-            int spinSpeed = 400;
-            if(numSteps < 0) spinSpeed = -spinSpeed;
-            
-            stepperLeft.setSpeed(-spinSpeed);
-            stepperRight.setSpeed(spinSpeed);
-            
-            Serial.print("SW_AVOID: Turning ");
-            Serial.print(avoidTurnAngle);
-            Serial.println(" degrees away from obstacle");
+
+            // Start non-blocking turn
+            turnNonBlocking(escapeAngle);
+
+            Serial.print("SW_AVOID (Vector): Turning ");
+            Serial.print(escapeAngle);
+            Serial.print(" deg | Mag=");
+            Serial.println(magnitude);
+
+            turnInitialized = true;
           }
-          
+
           // Execute turn
           if (stepperLeft.runSpeed() | stepperRight.runSpeed()) {
-            // Still turning
+            // still turning
           } else {
-            // Turn complete, move to forward motion
+            turnInitialized = false;
             avoidState = AVOID_MOVING;
           }
-          break;
-          
-        case AVOID_MOVING:
-          // If this is the first time in this state, set up forward movement
-          if (stepperLeft.distanceToGo() == 0 && stepperRight.distanceToGo() == 0) {
-            int avoidDistance = getRandomNumber(30, 50); // Move 30-50 cm
-            int distance_step = avoidDistance * CM_TO_STEPS_CONV;
-            
-            stepperLeft.setCurrentPosition(0);
-            stepperRight.setCurrentPosition(0);
-            stepperLeft.moveTo(distance_step);
-            stepperRight.moveTo(distance_step);
-            stepperLeft.setSpeed(600);
-            stepperRight.setSpeed(600);
-            
-            Serial.print("SW_AVOID: Moving forward ");
-            Serial.print(avoidDistance);
-            Serial.println("cm");
+          break;     
+
+        case AVOID_MOVING: {
+          static bool moveInitialized = false;
+          if (!moveInitialized) {
+            float Fx, Fy;
+            computeRepulsiveVector(Fx, Fy);
+            float magnitude = sqrt(Fx*Fx + Fy*Fy);
+
+            // Map force magnitude to escape distance
+            int escapeDistance = map(
+              constrain(magnitude, 0, MAX_FORCE),
+              0, MAX_FORCE,
+              15, 50
+            );
+            forwardNonBlocking(escapeDistance);
+
+            Serial.print("SW_AVOID (Vector): Moving ");
+            Serial.print(escapeDistance);
+            Serial.println(" cm");
+
+            moveInitialized = true;
           }
-          
-          // Execute forward movement
+
           if (stepperLeft.runSpeed() | stepperRight.runSpeed()) {
-            // Still moving
+            // still moving
           } else {
-            // Movement complete
+            moveInitialized = false;
             avoidState = AVOID_COMPLETE;
           }
           break;
-          
+        }
         case AVOID_COMPLETE:
           // Avoidance complete, check if clear
           Serial.println("SW_AVOID: Complete, checking if clear...");
@@ -1014,6 +1014,8 @@ void smartWanderStateMachine() {
       break;
   }
 }
+// ========================================= Smart Follow Behavior ===================================
+
 
 // ===================================== Main Loop ===================================================
 /*
