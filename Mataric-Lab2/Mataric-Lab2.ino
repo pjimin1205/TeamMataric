@@ -99,6 +99,7 @@ enum RunawayState {
   RUNAWAY_IDLE,      // Sitting still
   RUNAWAY_TURNING,   // Turning away
   RUNAWAY_MOVING     // Moving forward
+  SMART_WANDER_MODE  // Smart wander with state machine (wander -> collide -> avoid)
 };
 RunawayState runawayState = RUNAWAY_IDLE;
 
@@ -109,6 +110,32 @@ const float KP_STEERING = 3.0;           // Proportional gain for steering
 const int MIN_FOLLOW_SPEED = 100;        // Minimum motor speed
 const int MAX_FOLLOW_SPEED = 800;        // Maximum motor speed
 const int FOLLOW_DETECT_THRESHOLD = 50;  // cm - max distance to detect object to follow
+
+// STATE MACHINE for Smart Wander Mode
+enum SmartWanderState {
+  SW_WANDERING,     // GREEN LED - randomly wander
+  SW_COLLIDE,       // RED LED - obstacle detected, stopped
+  SW_AVOIDING       // YELLOW LED - avoiding obstacle
+};
+
+SmartWanderState smartWanderState = SW_WANDERING;
+
+// Smart Wander constants
+const int DANGER_DISTANCE = 15;      // cm - danger threshold for obstacle detection
+const int CLEAR_DISTANCE = 35;       // cm - distance to be considered "clear" of obstacle
+
+// Smart Wander variables
+unsigned long lastWanderTime = 0;
+const unsigned long WANDER_INTERVAL = 3000; // Change direction every 3 seconds
+bool wanderMoving = false;
+
+// Avoid behavior variables
+enum AvoidState {
+  AVOID_TURNING,
+  AVOID_MOVING,
+  AVOID_COMPLETE
+};
+AvoidState avoidState = AVOID_TURNING;
 
 // Constant Vars
 #define INCHES_TO_CM 2.54 //conversion factor from inches to centimeters
@@ -410,6 +437,7 @@ void randomWander(){
   }
   goToAngle(randomAngle);
   forward(randomDistance);
+  
 }
 // --------------------- collide behavior ----------------------------------
 /*
@@ -515,31 +543,6 @@ void computeRepulsiveVector(float &Fx, float &Fy) {
   
   Fx -= fRightLidar * cos(radians(ANGLE_RIGHT_LIDAR));  // Right pushes left
   Fy -= fRightLidar * sin(radians(ANGLE_RIGHT_LIDAR));
-  
-  
-  // Debug output - show all forces and resulting vector
-  // Serial.print("Forces | ");
-  // Serial.print("LS:");
-  // Serial.print(fLeftSonar, 2);
-  // Serial.print(" RS:");
-  // Serial.print(fRightSonar, 2);
-  // Serial.print(" FL:");
-  // Serial.print(fFrontLidar, 2);
-  // Serial.print(" BL:");
-  // Serial.print(fBackLidar, 2);
-  // Serial.print(" LL:");
-  // Serial.print(fLeftLidar, 2);
-  // Serial.print(" RL:");
-  // Serial.print(fRightLidar, 2);
-
-  // Serial.print(" || Vector | Fx:");
-  // Serial.print(Fx, 2);
-  // Serial.print(" Fy:");
-  // Serial.println(Fy, 2);
-
- 
-
-  
 }
 // Detect if robot is oscillating (stuck in local minima)
 bool detectOscillation(int currentAngle) {
@@ -681,7 +684,7 @@ void runawayBehavior() {
   }
 }
 
-// --------------------- Follow behavior --------------------------------------
+// ============================= Follow behavior ============================================
 // FOLLOW BEHAVIOR (Curious Kid) - NON-BLOCKING with Proportional Control
 // Robot follows object at target distance using proportional control
 // Speeds up when object moves away, slows down when object approaches
@@ -765,7 +768,257 @@ void followBehavior() {
   Serial.println(rightSpeed);
 }
 
+// ================================== Smart Wander Behavior ==========================================
+// Helper functions
+/*
+  Check if any sensor detects an obstacle within danger distance
+*/
+bool checkObstacleInDanger() {
+  return (leftSonarDist > 0 && leftSonarDist < DANGER_DISTANCE) ||
+         (rightSonarDist > 0 && rightSonarDist < DANGER_DISTANCE) ||
+         (frontLidarDist > 0 && frontLidarDist < DANGER_DISTANCE) ||
+         (leftLidarDist > 0 && leftLidarDist < DANGER_DISTANCE) ||
+         (rightLidarDist > 0 && rightLidarDist < DANGER_DISTANCE);
+}
+/*
+  Check if robot is clear of all obstacles
+*/
+bool checkClearOfObstacles() {
+  return (leftSonarDist == 0 || leftSonarDist > CLEAR_DISTANCE) &&
+         (rightSonarDist == 0 || rightSonarDist > CLEAR_DISTANCE) &&
+         (frontLidarDist == 0 || frontLidarDist > CLEAR_DISTANCE) &&
+         (leftLidarDist == 0 || leftLidarDist > CLEAR_DISTANCE) &&
+         (rightLidarDist == 0 || rightLidarDist > CLEAR_DISTANCE);
+}
+/*
+  Get the direction of the closest obstacle
+  Returns angle in degrees
+*/
+float getObstacleDirection() {
+  int minDist = 1000;
+  float obstacleAngle = 0;
+  
+  // angle is equivalent to sensor closest to the object
+  if (leftSonarDist > 0 && leftSonarDist < minDist) {
+    minDist = leftSonarDist;
+    obstacleAngle = ANGLE_LEFT_SONAR;
+  }
+  if (rightSonarDist > 0 && rightSonarDist < minDist) {
+    minDist = rightSonarDist;
+    obstacleAngle = ANGLE_RIGHT_SONAR;
+  }
+  if (frontLidarDist > 0 && frontLidarDist < minDist) {
+    minDist = frontLidarDist;
+    obstacleAngle = ANGLE_FRONT_LIDAR;
+  }
+  if (leftLidarDist > 0 && leftLidarDist < minDist) {
+    minDist = leftLidarDist;
+    obstacleAngle = ANGLE_LEFT_LIDAR;
+  }
+  if (rightLidarDist > 0 && rightLidarDist < minDist) {
+    minDist = rightLidarDist;
+    obstacleAngle = ANGLE_RIGHT_LIDAR;
+  }
+  return obstacleAngle;
+}
+/*
+  Smart Wander with State Machine
+  Combines wandering, collision detection, and avoidance
+  GREEN LED = wandering, RED LED = collide, YELLOW LED = avoiding
+*/
+void smartWanderStateMachine() {
+  
+  switch(smartWanderState) {
+    
+    case SW_WANDERING:
+      // GREEN LED on while wandering
+      turnOffLEDs();
+      digitalWrite(greenLED, HIGH);
+      
+      unsigned long currentTime = millis();
+      
+      // Check if it's time to start a new wander move
+      if (!wanderMoving && (currentTime - lastWanderTime >= WANDER_INTERVAL)) {
+        // Generate new random wander parameters
+        int wanderAngle = getRandomNumber(-90, 90); // Turn -90 to 90 degrees
+        int wanderDistance = getRandomNumber(20, 40); // Move 20-40 cm
+        
+        // Start the turn
+        double angle_rad = wanderAngle * PI / 180.0;
+        int numSteps = angle_rad * WIDTH_OF_BOT_CM / 2.0 * CM_TO_STEPS_CONV;
+        
+        stepperLeft.setCurrentPosition(0);
+        stepperRight.setCurrentPosition(0);
+        stepperLeft.moveTo(-numSteps);
+        stepperRight.moveTo(numSteps);
+        
+        int spinSpeed = 300;
+        if(numSteps < 0) spinSpeed = -spinSpeed;
+        
+        stepperLeft.setSpeed(-spinSpeed);
+        stepperRight.setSpeed(spinSpeed);
+        
+        wanderMoving = true;
+        Serial.print("SW_WANDER: Turn ");
+        Serial.print(wanderAngle);
+        Serial.print("deg, Move ");
+        Serial.print(wanderDistance);
+        Serial.println("cm");
+      }
+      
+      // Continue executing the wander move
+      if (wanderMoving) {
+        // Check if turn is complete
+        if (stepperLeft.distanceToGo() == 0 && stepperRight.distanceToGo() == 0) {
+          // If we just finished turning, start moving forward
+          if (stepperLeft.targetPosition() != 0) {
+            // Start forward movement
+            int wanderDistance = getRandomNumber(20, 40);
+            int distance_step = wanderDistance * CM_TO_STEPS_CONV;
+            stepperLeft.setCurrentPosition(0);
+            stepperRight.setCurrentPosition(0);
+            stepperLeft.moveTo(distance_step);
+            stepperRight.moveTo(distance_step);
+            stepperLeft.setSpeed(500);
+            stepperRight.setSpeed(500);
+          } else {
+            // Movement complete
+            wanderMoving = false;
+            lastWanderTime = currentTime;
+          }
+        } else {
+          // Continue moving
+          stepperLeft.runSpeed();
+          stepperRight.runSpeed();
+        }
+      }
+      
+      // Check for obstacle in danger distance
+      if (checkObstacleInDanger()) {
+        Serial.println("STATE TRANSITION: SW_WANDERING -> SW_COLLIDE");
+        smartWanderState = SW_COLLIDE;
+        stop(); // Stop immediately
+        wanderMoving = false; // Reset wander flag
+      }
+      break;
+      
+    case SW_COLLIDE:
+      // RED LED on when obstacle detected
+      stop();
+      turnOffLEDs();
+      digitalWrite(redLED, HIGH);
+      
+      Serial.println("SW_COLLIDE: Obstacle detected in danger zone!");
+      
+      // Immediately transition to avoidance
+      smartWanderState = SW_AVOIDING;
+      avoidState = AVOID_TURNING; // Reset avoid state machine
+      Serial.println("STATE TRANSITION: SW_COLLIDE -> SW_AVOIDING");
+      break;
+      
+    case SW_AVOIDING:
+      // YELLOW LED on while avoiding
+      turnOffLEDs();
+      digitalWrite(yellowLED, HIGH);
+      
+      switch(avoidState) {
+        case AVOID_TURNING:
+          // If this is the first time in this state, set up the turn
+          if (stepperLeft.distanceToGo() == 0 && stepperRight.distanceToGo() == 0) {
+            // Get obstacle direction and turn away from it
+            float obstacleAngle = getObstacleDirection();
+            int avoidTurnAngle;
+            
+            // Turn away from obstacle (opposite direction)
+            if (obstacleAngle >= 0) {
+              // Obstacle on right or front-right, turn left
+              avoidTurnAngle = getRandomNumber(60, 120);
+            } else {
+              // Obstacle on left or front-left, turn right
+              avoidTurnAngle = -getRandomNumber(60, 120);
+            }
+            
+            // Set up turn
+            double angle_rad = avoidTurnAngle * PI / 180.0;
+            int numSteps = angle_rad * WIDTH_OF_BOT_CM / 2.0 * CM_TO_STEPS_CONV;
+            
+            stepperLeft.setCurrentPosition(0);
+            stepperRight.setCurrentPosition(0);
+            stepperLeft.moveTo(-numSteps);
+            stepperRight.moveTo(numSteps);
+            
+            int spinSpeed = 400;
+            if(numSteps < 0) spinSpeed = -spinSpeed;
+            
+            stepperLeft.setSpeed(-spinSpeed);
+            stepperRight.setSpeed(spinSpeed);
+            
+            Serial.print("SW_AVOID: Turning ");
+            Serial.print(avoidTurnAngle);
+            Serial.println(" degrees away from obstacle");
+          }
+          
+          // Execute turn
+          if (stepperLeft.runSpeed() | stepperRight.runSpeed()) {
+            // Still turning
+          } else {
+            // Turn complete, move to forward motion
+            avoidState = AVOID_MOVING;
+          }
+          break;
+          
+        case AVOID_MOVING:
+          // If this is the first time in this state, set up forward movement
+          if (stepperLeft.distanceToGo() == 0 && stepperRight.distanceToGo() == 0) {
+            int avoidDistance = getRandomNumber(30, 50); // Move 30-50 cm
+            int distance_step = avoidDistance * CM_TO_STEPS_CONV;
+            
+            stepperLeft.setCurrentPosition(0);
+            stepperRight.setCurrentPosition(0);
+            stepperLeft.moveTo(distance_step);
+            stepperRight.moveTo(distance_step);
+            stepperLeft.setSpeed(600);
+            stepperRight.setSpeed(600);
+            
+            Serial.print("SW_AVOID: Moving forward ");
+            Serial.print(avoidDistance);
+            Serial.println("cm");
+          }
+          
+          // Execute forward movement
+          if (stepperLeft.runSpeed() | stepperRight.runSpeed()) {
+            // Still moving
+          } else {
+            // Movement complete
+            avoidState = AVOID_COMPLETE;
+          }
+          break;
+          
+        case AVOID_COMPLETE:
+          // Avoidance complete, check if clear
+          Serial.println("SW_AVOID: Complete, checking if clear...");
+          
+          if (checkClearOfObstacles()) {
+            Serial.println("STATE TRANSITION: SW_AVOIDING -> SW_WANDERING (clear!)");
+            smartWanderState = SW_WANDERING;
+            wanderMoving = false; // Reset wander state
+            lastWanderTime = millis();
+            avoidState = AVOID_TURNING; // Reset for next time
+          } else {
+            // Still obstacles nearby, continue avoiding
+            Serial.println("SW_AVOID: Still obstacles nearby, continuing avoidance...");
+            avoidState = AVOID_TURNING; // Restart avoidance
+          }
+          break;
+      }
+      break;
+  }
+}
 
+// ===================================== Main Loop ===================================================
+/*
+  Printing helper function that prints the data as the function is called
+*/
 void printSensorData() {
   Serial.print("left sonar: " + String(leftSonarDist));
   Serial.print(", ");
@@ -774,7 +1027,16 @@ void printSensorData() {
   Serial.print(", B: " + String(backLidarDist));
   Serial.print(", L: " + String(leftLidarDist));
   Serial.println(", R: " + String(rightLidarDist));
-
+}
+/*
+  Printing helper function that prints the data periodically
+*/
+void printSensorDataPeriodically(){
+  static unsigned long lastPrint = 0;
+  if (millis() - lastPrint > 500) {
+    printSensorData();
+    lastPrint = millis();
+  }
 }
 
 void setup() {
@@ -797,8 +1059,15 @@ void setup() {
     Serial.println("COLLIDE (Aggressive Kid) - RED LED");
   } else if (currentMode == RUNAWAY_MODE) {
     Serial.println("RUNAWAY (Shy Kid) - YELLOW LED");
-  } else {
+  } else if (currentMode == FOLLOW_MODE) {
+    Serial.println("FOLLOW (Curious Kid) - YELLOW+GREEN LED");
+  } else if (currentMode == RANDOM_WANDER) {
     Serial.println("RANDOM WANDER - GREEN LED");
+  } else if (currentMode == SMART_WANDER_MODE) {
+    Serial.println("SMART WANDER STATE MACHINE");
+    Serial.println("  GREEN LED = Wandering");
+    Serial.println("  RED LED = Collision Detected");
+    Serial.println("  YELLOW LED = Avoiding Obstacle");
   }
   delay(pauseTime);
 }
@@ -816,6 +1085,8 @@ void loop() {
     followBehavior(); // FOLLOW: Curious kid follows object at target distance with proportional control
   } else if (currentMode == RANDOM_WANDER) {
     randomWander(); // RANDOM WANDER: Wanders randomly
+  } else if (currentMode == SMART_WANDER_MODE){
+    smartWanderStateMachine(); // SMART WANDER: State machine (wander -> collide -> avoid)
   }
-  printSensorData();
+  // printSensorDataPeriodically();
 }
