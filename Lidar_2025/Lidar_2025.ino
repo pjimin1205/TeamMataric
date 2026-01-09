@@ -33,7 +33,7 @@ void loop() {
   Serial.print(left);
   Serial.print(" r: ");
   Serial.println(right);
-  delay(100);
+  delay(100); 
 }
 
 // reads a lidar given a pin

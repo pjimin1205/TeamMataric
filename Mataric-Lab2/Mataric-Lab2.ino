@@ -92,7 +92,7 @@ enum BehaviorMode {
   FOLLOW_MODE,     // Curious kid: follows object at target distance
   RANDOM_WANDER    // Random wander behavior
 };
-BehaviorMode currentMode = FOLLOW_MODE;  // Change this to switch behaviors
+BehaviorMode currentMode = RUNAWAY_MODE;  // Change this to switch behaviors
 
 // State machine for non-blocking runaway behavior
 enum RunawayState {
@@ -757,8 +757,17 @@ void followBehavior() {
   rightSpeed = constrain(rightSpeed, 0, MAX_FOLLOW_SPEED);
   
   // Apply speeds to motors (non-blocking)
-  stepperLeft.setSpeed(leftSpeed);
-  stepperRight.setSpeed(rightSpeed);
+  if (abs(leftSpeed) < 30) leftSpeed = 0; // add deadband
+  if (abs(rightSpeed) < 30) rightSpeed = 0;
+  if (abs(leftSpeed) < 50) leftSpeed = 0; // clamp direction flips near zero
+  
+  static int prevL = 0, prevR = 0;
+  if (leftSpeed != prevL || rightSpeed != prevR) { // only change speed if it actually changed
+    stepperLeft.setSpeed(leftSpeed);
+    stepperRight.setSpeed(rightSpeed);
+    prevL = leftSpeed;
+    prevR = rightSpeed;
+  }
   stepperLeft.runSpeed();
   stepperRight.runSpeed();
   
