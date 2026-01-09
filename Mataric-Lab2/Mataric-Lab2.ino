@@ -289,31 +289,31 @@ void goToAngle(int angle){
 
   Accounts for odometry error. (unimplemented)
 */
-void goToGoal(int x, int y){
-  encoder[LEFT] = 0;
-  encoder[RIGHT] = 0;
+// void goToGoal(int x, int y){
+//   encoder[LEFT] = 0;
+//   encoder[RIGHT] = 0;
 
-  turnOffLEDs();
-  digitalWrite(greenLED, HIGH); digitalWrite(yellowLED, HIGH);
+//   turnOffLEDs();
+//   digitalWrite(greenLED, HIGH); digitalWrite(yellowLED, HIGH);
   
-  Serial.println("Go To Goal");
-  double angle_rad = atan2(y,x);
-  int angle = angle_rad * (180/PI);
-  goToAngle(angle);
-  digitalWrite(greenLED, HIGH); digitalWrite(yellowLED, HIGH);
+//   Serial.println("Go To Goal");
+//   double angle_rad = atan2(y,x);
+//   int angle = angle_rad * (180/PI);
+//   goToAngle(angle);
+//   digitalWrite(greenLED, HIGH); digitalWrite(yellowLED, HIGH);
 
-  double forwardDistance_cm =  sqrt(sq(x)+sq(y)); // go forward by the hypotenuse
-  double forwardDistance_ft = forwardDistance_cm / CM_PER_FOOT;
-  Serial.println(String("  going forward by ") + forwardDistance_ft + (" ft"));
-  forward(forwardDistance_cm);
+//   double forwardDistance_cm =  sqrt(sq(x)+sq(y)); // go forward by the hypotenuse
+//   double forwardDistance_ft = forwardDistance_cm / CM_PER_FOOT;
+//   Serial.println(String("  going forward by ") + forwardDistance_ft + (" ft"));
+//   forward(forwardDistance_cm);
   
-  Serial.println("Starting goToGoal Error Correction...");
-  delay(1000);
-  // goToGoalErrorCorrection(forwardDistance_cm);
+//   Serial.println("Starting goToGoal Error Correction...");
+//   delay(1000);
+//   // goToGoalErrorCorrection(forwardDistance_cm);
 
-  Serial.println("Turning off led's for goal");
-  turnOffLEDs();
-}
+//   Serial.println("Turning off led's for goal");
+//   turnOffLEDs();
+// }
 
 /*
   Moves the robot forward by a specified distance
@@ -1118,18 +1118,29 @@ void loop() {
   //updateSonarReadings();
   updateLidarReadings();
   
-  // Robot continuously reads sensors and reacts in real-time
-  if (currentMode == COLLIDE_MODE) {
-    collideBehavior(); // COLLIDE: Drives forward, stops immediately when obstacle detected
-  } else if (currentMode == RUNAWAY_MODE) {
-    runawayBehavior(); // RUNAWAY: Sits still, runs away using potential fields when approached
-  } else if (currentMode == FOLLOW_MODE) {
-    followBehavior(); // FOLLOW: Curious kid follows object at target distance with proportional control
-  } else if (currentMode == RANDOM_WANDER) {
-    randomWander(); // RANDOM WANDER: Wanders randomly
-  } else if (currentMode == SMART_WANDER_MODE){
-    smartWanderStateMachine(); // SMART WANDER: State machine (wander -> collide -> avoid)
-  }
-  delayMicroseconds(50);
+  // // Robot continuously reads sensors and reacts in real-time
+  // if (currentMode == COLLIDE_MODE) {
+  //   collideBehavior(); // COLLIDE: Drives forward, stops immediately when obstacle detected
+  // } else if (currentMode == RUNAWAY_MODE) {
+  //   runawayBehavior(); // RUNAWAY: Sits still, runs away using potential fields when approached
+  // } else if (currentMode == FOLLOW_MODE) {
+  //   followBehavior(); // FOLLOW: Curious kid follows object at target distance with proportional control
+  // } else if (currentMode == RANDOM_WANDER) {
+  //   randomWander(); // RANDOM WANDER: Wanders randomly
+  // } else if (currentMode == SMART_WANDER_MODE){
+  //   smartWanderStateMachine(); // SMART WANDER: State machine (wander -> collide -> avoid)
+  // }
+  // delayMicroseconds(50);
   // printSensorDataPeriodically();
+
+  stepperLeft.setSpeed(800);
+  stepperRight.setSpeed(800);
+
+  stepperLeft.runSpeed();
+  stepperRight.runSpeed();
+
+  Serial.print("Is left on:");
+  Serial.println(stepperLeft.runSpeed());
+  Serial.print("Is right on:");
+  Serial.println(stepperRight.runSpeed());
 }
