@@ -90,16 +90,17 @@ enum BehaviorMode {
   COLLIDE_MODE,    // Aggressive kid: drives forward, stops at obstacle
   RUNAWAY_MODE,    // Shy kid: sits still, runs away when approached
   FOLLOW_MODE,     // Curious kid: follows object at target distance
-  RANDOM_WANDER    // Random wander behavior
+  RANDOM_WANDER,    // Random wander behavior
+  SMART_WANDER_MODE
 };
-BehaviorMode currentMode = RUNAWAY_MODE;  // Change this to switch behaviors
+BehaviorMode currentMode = COLLIDE_MODE;  // Change this to switch behaviors
 
 // State machine for non-blocking runaway behavior
 enum RunawayState {
   RUNAWAY_IDLE,      // Sitting still
   RUNAWAY_TURNING,   // Turning away
   RUNAWAY_MOVING,     // Moving forward
-  SMART_WANDER_MODE  // Smart wander with state machine (wander -> collide -> avoid)
+  // SMART_WANDER_MODE  // Smart wander with state machine (wander -> collide -> avoid)
 };
 RunawayState runawayState = RUNAWAY_IDLE;
 
@@ -444,7 +445,17 @@ void randomWander(){
   }
   goToAngle(randomAngle);
   forward(randomDistance);
-  
+}
+void randomWanderNonBlocking(){
+  turnOffLEDs();
+  digitalWrite(greenLED, HIGH);
+  int randomAngle = getRandomNumber(15, 360); // min of 15 deg, max of 360 deg
+  int randomDistance = getRandomNumber(15, 50); // min of 15 cm, maximum of 50 cm
+
+  if (abs(randomAngle) < 15) {
+    randomAngle = (randomAngle < 0) ? -15 : 15;
+  }
+  turnNonBlocking(randomAngle);
 }
 // --------------------- collide behavior ----------------------------------
 /*
@@ -464,7 +475,10 @@ void collideBehavior() {
   //   obstacleDetected = true;
   //   sensorType = 2;
   // }
-  if(frontLidarDist < OBSTACLE_THRESHOLD && frontLidarDist > 0){
+  if((frontLidarDist < OBSTACLE_THRESHOLD && frontLidarDist > 0)
+    || (backLidarDist < OBSTACLE_THRESHOLD && backLidarDist > 0)
+    || (leftLidarDist < OBSTACLE_THRESHOLD && leftLidarDist > 0)
+    || (rightLidarDist < OBSTACLE_THRESHOLD && rightLidarDist > 0)){
     obstacleDetected = true;
     sensorType = 3;
   }
@@ -496,8 +510,8 @@ void collideBehavior() {
     digitalWrite(greenLED, LOW);
     
     // Set continuous forward motion
-    stepperLeft.setSpeed(leftSpd);
-    stepperRight.setSpeed(rightSpd);
+    stepperLeft.setSpeed(800);
+    stepperRight.setSpeed(800);
     
     // Run motors non-blocking
     stepperLeft.runSpeed();
@@ -551,6 +565,7 @@ void computeRepulsiveVector(float &Fx, float &Fy) {
   Fx -= fRightLidar * cos(radians(ANGLE_RIGHT_LIDAR));  // Right pushes left
   Fy -= fRightLidar * sin(radians(ANGLE_RIGHT_LIDAR));
 }
+
 // Detect if robot is oscillating (stuck in local minima)
 bool detectOscillation(int currentAngle) {
   if (abs(currentAngle - lastAngle) > 150) {
@@ -562,6 +577,7 @@ bool detectOscillation(int currentAngle) {
   lastAngle = currentAngle;
   return (oscillationCount >= OSCILLATION_THRESHOLD);
 }
+
 // NON-BLOCKING turn function
 void turnNonBlocking(int angle) {
   if (abs(angle) < 5) return; // ignores small angles
@@ -629,8 +645,8 @@ void runawayBehavior() {
           turnNonBlocking(turnAngle);
         }
         
-        Serial.print("RUNAWAY: Turning away, angle: ");
-        Serial.println(turnAngle);
+        // Serial.print("RUNAWAY: Turning away, angle: ");
+        // Serial.println(turnAngle);
         
         runawayState = RUNAWAY_TURNING;
       } else {
@@ -1099,7 +1115,7 @@ void setup() {
 }
 
 void loop() {
-  updateSonarReadings();
+  //updateSonarReadings();
   updateLidarReadings();
   
   // Robot continuously reads sensors and reacts in real-time
@@ -1114,5 +1130,6 @@ void loop() {
   } else if (currentMode == SMART_WANDER_MODE){
     smartWanderStateMachine(); // SMART WANDER: State machine (wander -> collide -> avoid)
   }
+  delayMicroseconds(50);
   // printSensorDataPeriodically();
 }
