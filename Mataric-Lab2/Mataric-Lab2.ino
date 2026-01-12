@@ -1119,17 +1119,27 @@ void loop() {
   updateLidarReadings();
   
   // Robot continuously reads sensors and reacts in real-time
-  if (currentMode == COLLIDE_MODE) {
-    collideBehavior(); // COLLIDE: Drives forward, stops immediately when obstacle detected
-  } else if (currentMode == RUNAWAY_MODE) {
-    runawayBehavior(); // RUNAWAY: Sits still, runs away using potential fields when approached
-  } else if (currentMode == FOLLOW_MODE) {
-    followBehavior(); // FOLLOW: Curious kid follows object at target distance with proportional control
-  } else if (currentMode == RANDOM_WANDER) {
-    randomWander(); // RANDOM WANDER: Wanders randomly
-  } else if (currentMode == SMART_WANDER_MODE){
-    smartWanderStateMachine(); // SMART WANDER: State machine (wander -> collide -> avoid)
-  }
-  delayMicroseconds(50);
+  // if (currentMode == COLLIDE_MODE) {
+  //   collideBehavior(); // COLLIDE: Drives forward, stops immediately when obstacle detected
+  // } else if (currentMode == RUNAWAY_MODE) {
+  //   runawayBehavior(); // RUNAWAY: Sits still, runs away using potential fields when approached
+  // } else if (currentMode == FOLLOW_MODE) {
+  //   followBehavior(); // FOLLOW: Curious kid follows object at target distance with proportional control
+  // } else if (currentMode == RANDOM_WANDER) {
+  //   randomWander(); // RANDOM WANDER: Wanders randomly
+  // } else if (currentMode == SMART_WANDER_MODE){
+  //   smartWanderStateMachine(); // SMART WANDER: State machine (wander -> collide -> avoid)
+  // }
+  // delayMicroseconds(50);
   // printSensorDataPeriodically();
+  stepperLeft.setSpeed(800);
+  stepperRight.setSpeed(800);
+
+  stepperLeft.runSpeed();
+  stepperRight.runSpeed();
+
+  Serial.print("Is left on:");
+  Serial.println(stepperLeft.runSpeed());
+  Serial.print("Is right on:");
+  Serial.println(stepperRight.runSpeed());
 }
