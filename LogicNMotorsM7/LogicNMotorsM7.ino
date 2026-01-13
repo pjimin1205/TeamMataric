@@ -6,6 +6,9 @@
 // TURN THIS ON TO SEE SENSOR READINGS
 bool printSenRead = false;
 
+// TURN THIS ON TO SEE FORCE CALCULATIONS
+bool printForceCalc = true;
+
 // Sensor interval
 unsigned long lastSensorRequest = 0;
 const long sensorInterval = 100; // Only check sensors every 100ms
@@ -14,6 +17,17 @@ const long sensorInterval = 100; // Only check sensors every 100ms
 unsigned long lastReorientRequest = 0;
 const long reorientInterval = 3000;
 
+// Force Constants
+const int MAX_FORCE = 100;
+const float K_REPULSIVE = 200.0;
+
+// Sensor directions
+const float ANGLE_LEFT_SONAR = 45.0;     // Left sonar at 45 degrees
+const float ANGLE_RIGHT_SONAR = -45.0;   // Right sonar at -45 degrees
+const float ANGLE_FRONT_LIDAR = 0.0;     // Front LIDAR at 0 degrees
+const float ANGLE_BACK_LIDAR = 180.0;    // Back LIDAR at 180 degrees
+const float ANGLE_LEFT_LIDAR = 90.0;     // Left LIDAR at 90 degrees
+const float ANGLE_RIGHT_LIDAR = -90.0;   // Right LIDAR at -90 degrees
 
 
 //state LEDs connections
@@ -112,20 +126,65 @@ bool collideDetection(SensorPacket p){
 
   if(p.frontLidar < maximumStoppingDist && p.frontLidar > 0){
     //obstacle is too close return true
+    digitalWrite(redLED, HIGH);
     return true;
   } else if(p.rightSonar < maximumStoppingDist && p.rightSonar > 0){
+    digitalWrite(ylwLED, HIGH);
     return true;
   } else if(p.leftSonar < maximumStoppingDist && p.leftSonar > 0){
+    digitalWrite(grnLED, HIGH);
     return true;
   }
-  
+  digitalWrite(grnLED, LOW);
+  digitalWrite(redLED, LOW);
+  digitalWrite(ylwLED, LOW);
   return false;
 }
+
+void computeRepulsiveVector(float &Fx, float &Fy) {
+  Fx = 0;
+  Fy = 0;
+  // Get forces from each sonar
+  float fLeftSonar = repulsiveForce(sensorData.leftSonar);
+  float fRightSonar = repulsiveForce(sensorData.rightSonar);
+  // get forces from each lidar
+  float fFrontLidar = repulsiveForce(sensorData.frontLidar);
+  float fBackLidar = repulsiveForce(sensorData.backLidar);
+  float fLeftLidar = repulsiveForce(sensorData.leftLidar);
+  float fRightLidar = repulsiveForce(sensorData.rightLidar);
+  
+  // SONAR contributions (diagonal sensors)
+  Fx -= fLeftSonar * cos(radians(ANGLE_LEFT_SONAR));
+  Fy -= fLeftSonar * sin(radians(ANGLE_LEFT_SONAR));
+  
+  Fx -= fRightSonar * cos(radians(ANGLE_RIGHT_SONAR));
+  Fy -= fRightSonar * sin(radians(ANGLE_RIGHT_SONAR));
+  
+  // LIDAR contributions (cardinal directions)
+  Fx -= fFrontLidar * cos(radians(ANGLE_FRONT_LIDAR));  // Front pushes back
+  Fy -= fFrontLidar * sin(radians(ANGLE_FRONT_LIDAR));
+  
+  Fx -= fBackLidar * cos(radians(ANGLE_BACK_LIDAR));    // Back pushes forward
+  Fy -= fBackLidar * sin(radians(ANGLE_BACK_LIDAR));
+  
+  Fx -= fLeftLidar * cos(radians(ANGLE_LEFT_LIDAR));    // Left pushes right
+  Fy -= fLeftLidar * sin(radians(ANGLE_LEFT_LIDAR));
+  
+  Fx -= fRightLidar * cos(radians(ANGLE_RIGHT_LIDAR));  // Right pushes left
+  Fy -= fRightLidar * sin(radians(ANGLE_RIGHT_LIDAR));
+}
+
+float repulsiveForce(int distance) {
+  if (distance <= 0 || distance > maximumStoppingDist) return 0;
+  // Inverse square law with safe distance
+  float force = K_REPULSIVE / (distance * distance + 1);
+  return constrain(force, 0, MAX_FORCE);
+}
+
 
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial); 
   init_stepper(); //set up stepper motor
   
   RPC.begin(); 
@@ -163,6 +222,9 @@ void loop() {
       Serial.print(" | RSonar: "); Serial.print(sensorData.rightSonar);
       Serial.println();
     }
+  }
+
+  if (printForceCalc){
   }
 
   if(!collideDetection(sensorData)){
