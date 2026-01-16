@@ -241,33 +241,20 @@ float repulsiveForce(int distance) {
 
 void runAwayBehavior(float escapeAngle, float Fx, float Fy){
 
-  stepperLeft.setCurrentPosition(0);
-  stepperRight.setCurrentPosition(0);
 
-  int numSteps = 50; // move a little bit away from object to not loop
+  goToAngle(forceVectorAngle);
 
-  int magnitude = sqrt(sq(Fx) + sq(Fy));
-  
+  // int magnitude = sqrt(sq(Fx) + sq(Fy));
 
-
-  stepperLeft.setSpeed(-leftSpd);
-  stepperRight.setSpeed(-rightSpd);
-
-  long positions[2]; // Array of desired stepper positions
-  positions[1] = -numSteps; //left motor position
-  positions[0] = -numSteps; //right motor position
-  steppers.moveTo(positions);
-
-  leftStepper.setSpeed(leftSpd);
-  rightStepper.setSpeed(rightSpd);
+  // numSteps = numSteps*magnitude;
 
   
-  stepperLeft.setCurrentPosition(0);
-  stepperRight.setCurrentPosition(0);
+  // stepperLeft.setCurrentPosition(0);
+  // stepperRight.setCurrentPosition(0);
 
-  positions[1] = numSteps; //left motor position
-  positions[0] = numSteps; //right motor position
-  steppers.moveTo(positions);
+  // positions[1] = numSteps; //left motor position
+  // positions[0] = numSteps; //right motor position
+  // steppers.moveTo(positions);
 
   //steppers.runSpeedToPosition(); // Blocks until all are in position
 
@@ -349,8 +336,9 @@ void loop() {
   }
 
   if(!collideDetection(sensorData)){
-    stepperLeft.setSpeed(0);
-    stepperRight.setSpeed(0);
+    //randomWander();
+    stepperLeft.setSpeed(500);
+    stepperRight.setSpeed(500);
   } else{
     stepperLeft.setSpeed(0);
     stepperRight.setSpeed(0);
