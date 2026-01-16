@@ -108,6 +108,18 @@ void setup() {
   delay(500);
   RPC.bind("getSensorData", getSensorData);
   
+//   distance = pulseWidthUs * velocity / 2.0;
+//   if (distance < 0 || distance > 50) { distance = 0; }
+//   return distance;
+// }
+
+// int avgSonar(int pin, int num) {
+//   int sum = 0;
+//   int data;
+//   int distance;
+//   for (int i = 0; i < num; i++) {
+
+
   pinMode(LEDR, OUTPUT);
   digitalWrite(LEDR, LOW); // Red ON
 }

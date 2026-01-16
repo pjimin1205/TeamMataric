@@ -3,11 +3,22 @@
 #include <AccelStepper.h>//include the stepper motor library
 #include <MultiStepper.h>//include multiple stepper motor library
 
+// Constant Vars
+#define INCHES_TO_CM 2.54 //conversion factor from inches to centimeters
+#define TWO_FEET_IN_STEPS 1848 //number of steps to move robot forward 2 feet
+#define WIDTH_OF_BOT_CM 21.2 //width of robot in centimeters, distance between wheels center to center
+#define WHEEL_DIAM_CM 8.4 // wheel diameter in centimeters
+#define STEPS_PER_ROT 800 //number of steps per wheel rotation
+#define CM_PER_ROTATION 26.39 //circumference of wheel in centimeters
+#define CM_TO_STEPS_CONV STEPS_PER_ROT/CM_PER_ROTATION //conversion factor from centimeters to steps
+#define ENCODER_TICKS_PER_ROTATION 20 //number of encoder ticks per wheel rotation
+#define CM_PER_FOOT 30.48 // number of centimeters in a foot
+
 // TURN THIS ON TO SEE SENSOR READINGS
 bool printSenRead = false;
 
 // TURN THIS ON TO SEE FORCE CALCULATIONS
-bool printForceCalc = true;
+bool printForceCalc = false;
 
 // Sensor interval
 unsigned long lastSensorRequest = 0;
@@ -20,6 +31,15 @@ const long reorientInterval = 3000;
 // Force Constants
 const int MAX_FORCE = 100;
 const float K_REPULSIVE = 200.0;
+
+// Force Vector values
+float forceVectorx = 0;
+float forceVectory = 0;
+float forceVectorAngle = 0;
+
+// Speed Constants
+int spinSpeed = 200;
+
 
 // Sensor directions
 const float ANGLE_LEFT_SONAR = 45.0;     // Left sonar at 45 degrees
@@ -60,13 +80,13 @@ int stepTime = 500;     //delay time between high and low on step pin
 int wait_time = 1000;   //delay for printing data
 
 int minIntervalAngle = 13.79; // degrees 
-int leftSpd = 1000; // default speed for left and right motors in septs per second
-int rightSpd = 1000;
+int leftSpd = 500; // default speed for left and right motors in septs per second
+int rightSpd = 500;
 
 int leftSonarDist = 1000; // default left sonar distance
 int rightSonarDist = 1000; // default right sonar distance
 
-int maximumStoppingDist = 10; //cm
+int maximumStoppingDist = 15; //cm
 
 struct SensorPacket {
     int frontLidar;
@@ -117,9 +137,38 @@ void randomWander(){
   if (millis() - lastReorientRequest >= reorientInterval) {
     lastReorientRequest = millis();
 
-    stepperLeft.setSpeed(random(200, 1000));
-    stepperRight.setSpeed(random(200, 1000));
+    stepperLeft.setSpeed(random(200, 500));
+    stepperRight.setSpeed(random(200, 500));
   }
+}
+
+void goToAngle(int angle){
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  //double angle_rad = angle*PI/180;
+  
+  //double distanceToTravel = angle*WIDTH_OF_BOT_CM/2;
+
+  int numSteps = angle*WIDTH_OF_BOT_CM/2*CM_TO_STEPS_CONV;
+
+  long positions[2]; // Array of desired stepper positions
+  positions[1] = -numSteps; //left motor position
+  positions[0] = numSteps; //right motor position
+  steppers.moveTo(positions);
+
+  int spinSpeed = 200;
+  if(numSteps < 0){
+    spinSpeed = -spinSpeed;
+  }
+
+  stepperLeft.setSpeed(-spinSpeed);//set left motor speed
+  stepperRight.setSpeed(spinSpeed);//set right motor speed
+
+  steppers.runSpeedToPosition(); // Blocks until all are in position
+
+  return;
+
 }
 
 bool collideDetection(SensorPacket p){
@@ -135,13 +184,20 @@ bool collideDetection(SensorPacket p){
     digitalWrite(grnLED, HIGH);
     return true;
   }
+  // } else if(p.leftLidar < maximumStoppingDist && p.leftLidar > 0){
+  //   return true;
+  // } else if(p.rightLidar < maximumStoppingDist && p.rightLidar > 0){
+  //   return true;
+  // } else if(p.backLidar < maximumStoppingDist && p.backLidar > 0){
+  //   return true;
+  // }
   digitalWrite(grnLED, LOW);
   digitalWrite(redLED, LOW);
   digitalWrite(ylwLED, LOW);
   return false;
 }
 
-void computeRepulsiveVector(float &Fx, float &Fy) {
+void computeRepulsiveVector(float &Fx, float &Fy, float &angle) {
   Fx = 0;
   Fy = 0;
   // Get forces from each sonar
@@ -172,6 +228,8 @@ void computeRepulsiveVector(float &Fx, float &Fy) {
   
   Fx -= fRightLidar * cos(radians(ANGLE_RIGHT_LIDAR));  // Right pushes left
   Fy -= fRightLidar * sin(radians(ANGLE_RIGHT_LIDAR));
+
+  angle = atan2(Fy, Fx);
 }
 
 float repulsiveForce(int distance) {
@@ -181,6 +239,79 @@ float repulsiveForce(int distance) {
   return constrain(force, 0, MAX_FORCE);
 }
 
+void runAwayBehavior(float escapeAngle, float Fx, float Fy){
+
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  int numSteps = 50; // move a little bit away from object to not loop
+
+  int magnitude = sqrt(sq(Fx) + sq(Fy));
+  
+
+
+  stepperLeft.setSpeed(-leftSpd);
+  stepperRight.setSpeed(-rightSpd);
+
+  long positions[2]; // Array of desired stepper positions
+  positions[1] = -numSteps; //left motor position
+  positions[0] = -numSteps; //right motor position
+  steppers.moveTo(positions);
+
+  leftStepper.setSpeed(leftSpd);
+  rightStepper.setSpeed(rightSpd);
+
+  
+  stepperLeft.setCurrentPosition(0);
+  stepperRight.setCurrentPosition(0);
+
+  positions[1] = numSteps; //left motor position
+  positions[0] = numSteps; //right motor position
+  steppers.moveTo(positions);
+
+  //steppers.runSpeedToPosition(); // Blocks until all are in position
+
+
+
+}
+
+void followBehavior(float followAngle){
+  //angle inputted will probably be the repulsive vector so add Pi to it to get the angle pointing AT the object
+  if(followAngle > 0 ){
+    followAngle = followAngle - PI;
+  } else if(followAngle < 0){
+    followAngle = followAngle + PI;
+  } else{
+    followAngle = 0;
+  }
+
+  goToAngle(followAngle);
+
+  
+}
+
+// sends a message to the other core to update the sensors
+void updateSensorData(){
+  // Only talk to the M4 every 100ms
+  if (millis() - lastSensorRequest >= sensorInterval) {
+    lastSensorRequest = millis();
+
+    auto res = RPC.call("getSensorData");
+    
+    sensorData = res.as<SensorPacket>();
+
+
+    if(printSenRead){
+      Serial.print("F: "); Serial.print(sensorData.frontLidar);
+      Serial.print(" | B: "); Serial.print(sensorData.backLidar);
+      Serial.print(" | L: "); Serial.print(sensorData.leftLidar);
+      Serial.print(" | R: "); Serial.print(sensorData.rightLidar);
+      Serial.print(" | LSonar: "); Serial.print(sensorData.leftSonar);
+      Serial.print(" | RSonar: "); Serial.print(sensorData.rightSonar);
+      Serial.println();
+    }
+  }
+}
 
 
 void setup() {
@@ -204,35 +335,29 @@ void loop() {
   stepperLeft.runSpeed();
   stepperRight.runSpeed();
   
-  // Only talk to the M4 every 100ms
-  if (millis() - lastSensorRequest >= sensorInterval) {
-    lastSensorRequest = millis();
-
-    auto res = RPC.call("getSensorData");
-    
-    sensorData = res.as<SensorPacket>();
+  computeRepulsiveVector(forceVectorx, forceVectory, forceVectorAngle);
+  updateSensorData();
 
 
-    if(printSenRead){
-      Serial.print("F: "); Serial.print(sensorData.frontLidar);
-      Serial.print(" | B: "); Serial.print(sensorData.backLidar);
-      Serial.print(" | L: "); Serial.print(sensorData.leftLidar);
-      Serial.print(" | R: "); Serial.print(sensorData.rightLidar);
-      Serial.print(" | LSonar: "); Serial.print(sensorData.leftSonar);
-      Serial.print(" | RSonar: "); Serial.print(sensorData.rightSonar);
-      Serial.println();
-    }
-  }
 
   if (printForceCalc){
+
+    Serial.print("Fx = "); Serial.print(forceVectorx);
+    Serial.print(" Fy = "); Serial.print(forceVectory);
+    Serial.print(" Angle = "); Serial.println(forceVectorAngle*180/PI);
+    
   }
 
   if(!collideDetection(sensorData)){
-    randomWander();
+    stepperLeft.setSpeed(0);
+    stepperRight.setSpeed(0);
   } else{
     stepperLeft.setSpeed(0);
     stepperRight.setSpeed(0);
+    runAwayBehavior(forceVectorAngle, forceVectorx, forceVectory);
   }
+
+  
 
   stepperLeft.runSpeed();
   stepperRight.runSpeed();

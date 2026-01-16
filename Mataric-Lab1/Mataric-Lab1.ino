@@ -283,7 +283,7 @@ void goToAngle(int angle){
   stepperRight.setSpeed(spinSpeed);//set right motor speed
 
   steppers.runSpeedToPosition(); // Blocks until all are in position
-  /*
+  
   //check if both encoders have traveled the correct distance
   int currentLeftTicks = encoder[LEFT]; //how many encoder ticks have passed by
   int currentRightTicks = encoder[RIGHT];
@@ -318,7 +318,6 @@ void goToAngle(int angle){
   stepperRight.setSpeed(spinSpeed);//set right motor speed
 
   steppers.runSpeedToPosition(); // Blocks until all are in position
-  */
   turnOffLEDs();
 }
 
