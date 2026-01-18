@@ -14,6 +14,17 @@
 #define ENCODER_TICKS_PER_ROTATION 20 //number of encoder ticks per wheel rotation
 #define CM_PER_FOOT 30.48 // number of centimeters in a foot
 
+// Behavior modes
+enum BehaviorMode {
+  COLLIDE_MODE,    // Aggressive kid: drives forward, stops at obstacle
+  RUNAWAY_MODE,    // Shy kid: sits still, runs away when approached
+  FOLLOW_MODE,     // Curious kid: follows object at target distance
+  RANDOM_WANDER,    // Random wander behavior
+  SMART_WANDER_MODE,
+  SMART_FOLLOW_MODE
+};
+BehaviorMode currentMode = COLLIDE_MODE;  // Change this to switch 
+
 // TURN THIS ON TO SEE SENSOR READINGS
 bool printSenRead = false;
 
@@ -39,7 +50,13 @@ float forceVectorAngle = 0;
 
 // Speed Constants
 int spinSpeed = 200;
+int maxSpeed = 500;
 
+// Proportional Control constants
+float KP_STEERING = 20;
+float KP_DISTANCE = 20;
+
+int trapDetectionModifier = 5; //to added on to sensor readings to see if trapped
 
 // Sensor directions
 const float ANGLE_LEFT_SONAR = 45.0;     // Left sonar at 45 degrees
@@ -86,7 +103,9 @@ int rightSpd = 500;
 int leftSonarDist = 1000; // default left sonar distance
 int rightSonarDist = 1000; // default right sonar distance
 
-int maximumStoppingDist = 15; //cm
+int targetFollowDist = 10; //cm
+int minimumFollowingDist = 5; //cm
+int maximumStoppingDist = 10; //cm
 
 struct SensorPacket {
     int frontLidar;
@@ -239,41 +258,67 @@ float repulsiveForce(int distance) {
   return constrain(force, 0, MAX_FORCE);
 }
 
-void runAwayBehavior(float escapeAngle, float Fx, float Fy){
-
-
-  goToAngle(forceVectorAngle);
-
-  // int magnitude = sqrt(sq(Fx) + sq(Fy));
-
-  // numSteps = numSteps*magnitude;
+void runAwayBehavior(){
+  stepperLeft.setSpeed(0);
+  stepperRight.setSpeed(0);
 
   
-  // stepperLeft.setCurrentPosition(0);
-  // stepperRight.setCurrentPosition(0);
 
-  // positions[1] = numSteps; //left motor position
-  // positions[0] = numSteps; //right motor position
-  // steppers.moveTo(positions);
 
-  //steppers.runSpeedToPosition(); // Blocks until all are in position
-
+  // detect if there are obstacles on all sides
+  if(sensorData.frontLidar > 0 && sensorData.leftLidar > 0 && sensorData.rightLidar > 0 && sensorData.backLidar > 0){
+    // if there are obstacles on all sides, are they all within stopping distance? if so then stop moving the motors
+    if(sensorData.frontLidar < maximumStoppingDist+trapDetectionModifier && sensorData.leftLidar < maximumStoppingDist+trapDetectionModifier && sensorData.rightLidar < maximumStoppingDist+trapDetectionModifier && sensorData.backLidar < maximumStoppingDist+trapDetectionModifier){
+      stepperRight.setSpeed(0);
+      stepperLeft.setSpeed(0);
+      return;
+   }
+  }
+  
+  // otherwise, go to your escape angle
+  goToAngle(forceVectorAngle);
 
 
 }
 
 void followBehavior(float followAngle){
+  
   //angle inputted will probably be the repulsive vector so add Pi to it to get the angle pointing AT the object
-  if(followAngle > 0 ){
-    followAngle = followAngle - PI;
-  } else if(followAngle < 0){
-    followAngle = followAngle + PI;
-  } else{
-    followAngle = 0;
+  // Get minimum distance (closest object)
+
+  // Get minimum distance (closest object)
+  int minDistance = sensorData.leftSonar;
+  if (sensorData.rightSonar < minDistance) minDistance = sensorData.rightSonar;
+  if (sensorData.frontLidar < minDistance) minDistance = sensorData.frontLidar;
+  
+  // Calculate distance error (negative = too close, positive = too far)
+  float distanceError = minDistance - targetFollowDist;
+
+  float baseSpeed = KP_DISTANCE * distanceError;
+  baseSpeed = constrain(baseSpeed, 0, maxSpeed);
+
+  //if we are too close then stop
+  if(distanceError < 0){
+    stepperLeft.setSpeed(0);
+    stepperRight.setSpeed(0);
+    return;
   }
 
-  goToAngle(followAngle);
+  // Calculate steering error (difference between left and right sensors)
+  // Negative = object on left, Positive = object on right
+  float steeringError = sensorData.rightSonar - sensorData.leftSonar;
 
+
+  // Proportional control for steering correction
+  float steeringCorrection = KP_STEERING * steeringError;
+  steeringCorrection = constrain(steeringCorrection, -spinSpeed, spinSpeed);
+
+  // Calculate differential motor speeds for steering while moving
+  float leftSpeed = baseSpeed - steeringCorrection;
+  float rightSpeed = baseSpeed + steeringCorrection;
+
+  stepperRight.setSpeed(rightSpeed);
+  stepperLeft.setSpeed(leftSpeed);
   
 }
 
@@ -321,9 +366,9 @@ void setup() {
 void loop() {
   stepperLeft.runSpeed();
   stepperRight.runSpeed();
-  
-  computeRepulsiveVector(forceVectorx, forceVectory, forceVectorAngle);
   updateSensorData();
+  computeRepulsiveVector(forceVectorx, forceVectory, forceVectorAngle);
+  
 
 
 
@@ -335,14 +380,33 @@ void loop() {
     
   }
 
-  if(!collideDetection(sensorData)){
-    //randomWander();
-    stepperLeft.setSpeed(500);
-    stepperRight.setSpeed(500);
-  } else{
-    stepperLeft.setSpeed(0);
-    stepperRight.setSpeed(0);
-    runAwayBehavior(forceVectorAngle, forceVectorx, forceVectory);
+  if (currentMode == COLLIDE_MODE) {
+    if(collideDetection(sensorData)){
+      stepperLeft.setSpeed(0);
+      stepperRight.setSpeed(0);
+    } else{
+      stepperLeft.setSpeed(maxSpeed);
+      stepperRight.setSpeed(maxSpeed);
+    }
+  } else if (currentMode == RUNAWAY_MODE) {
+      runAwayBehavior(); // RUNAWAY: Sits still, runs away using potential fields when approached
+  } else if (currentMode == FOLLOW_MODE) {
+      followBehavior(forceVectorAngle); // FOLLOW: Curious kid follows object at target distance with proportional control
+  } else if (currentMode == RANDOM_WANDER) {
+      randomWander(); // RANDOM WANDER: Wanders randomly
+  } else if (currentMode == SMART_WANDER_MODE){
+      // SMART WANDER: State machine (wander -> collide -> avoid)
+      if(collideDetection(sensorData)){
+        runAwayBehavior();
+      } else{
+        randomWander();
+      }
+  } else if (currentMode == SMART_FOLLOW_MODE){
+      if(collideDetection(sensorData)){
+        followBehavior(forceVectorAngle);
+      } else{
+        randomWander();
+      }
   }
 
   
