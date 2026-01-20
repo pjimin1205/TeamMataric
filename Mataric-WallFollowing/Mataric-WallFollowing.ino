@@ -2,7 +2,6 @@
 #include <Arduino.h>//include for PlatformIO Ide
 #include <AccelStepper.h>//include the stepper motor library
 #include <MultiStepper.h>//include multiple stepper motor library
-
 // --------------------------------------- Constant Vars -------------------------------------------------------------
 #define INCHES_TO_CM 2.54 //conversion factor from inches to centimeters
 #define TWO_FEET_IN_STEPS 1848 //number of steps to move robot forward 2 feet
@@ -13,7 +12,6 @@
 #define CM_TO_STEPS_CONV STEPS_PER_ROT/CM_PER_ROTATION //conversion factor from centimeters to steps
 #define ENCODER_TICKS_PER_ROTATION 20 //number of encoder ticks per wheel rotation
 #define CM_PER_FOOT 30.48 // number of centimeters in a foot
-
 // ------------------------------------- LED's -------------------------------------------------------------------------
 #define redLED 5            //red LED for displaying states
 #define greenLED 6            //green LED for displaying states
@@ -22,7 +20,6 @@
 #define ylwLED 7            //yellow LED for displaying states
 #define enableLED 13        //stepper enabled LED
 int leds[3] = {5,6,7};      //array of LED pin numbers
-
 // ------------------------------------- Motor set up -------------------------------------------------------------------
 #define stepperEnable 48    //stepper enable pin on stepStick 
 #define rtStepPin 50 //right stepper motor step pin 
@@ -62,7 +59,6 @@ const float K_REPULSIVE = 200.0;
 float forceVectorx = 0;
 float forceVectory = 0;
 float forceVectorAngle = 0;
-
 // ------------------------------------- Sensors -------------------------------------------------------------------
 const float ANGLE_LEFT_SONAR = 45.0;     // Left sonar at 45 degrees
 const float ANGLE_RIGHT_SONAR = -45.0;   // Right sonar at -45 degrees
@@ -86,7 +82,12 @@ unsigned long lastSensorRequest = 0;
 const long sensorInterval = 100; // Only check sensors every 100ms
 SensorPacket sensorData; // initialize the sensor packet
 enum BehaviorMode { // Behavior modes
-  
+  LEFT_WALL
+  RIGHT_WALL
+  CENTER
+  AVOID
+  RANDOM_WANDER
+  GO_TO_GOAL
 };
 BehaviorMode currentMode = ;  // Change this to switch modes
 // ------------------------------------- START OF FUNCTIONS ------------------------------------------------------------------
