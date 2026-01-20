@@ -1,28 +1,58 @@
 #include <RPC.h>
 #include "Arduino.h"
 
+/*
+  SensorsM4.ino
+  --------------
+  Purpose:
+    Run on the M4 core to read range sensors (LIDAR and ultrasonic
+    sonars) and provide a serialized `SensorPacket` via RPC to the
+    M7 core. This file contains low-level sensor reading routines
+    and minimal data aggregation.
+
+  Hardware / Pins:
+    - Front LIDAR: pin 8
+    - Back  LIDAR: pin 9
+    - Left  LIDAR: pin 10
+    - Right LIDAR: pin 12
+    - Left Sonar trig/echo: pins 4 / 11
+    - Right Sonar trig/echo: pins 3 / 2
+
+  Notes:
+    - `RPC.bind("getSensorData", getSensorData)` exposes the
+      `getSensorData` function to the M7 core; it returns a
+      `SensorPacket` that matches the M7-side definition.
+    - This file focuses on readable, documented sensor helpers
+      without altering sensor logic.
+*/
+
+// Number of sensors (placeholder for arrays if needed)
 #define NUM_SENSORS 3
 
+// Simple buffer for potential aggregated results (unused currently)
 int sensorResults[NUM_SENSORS];
 
+// Number of samples used for averaging (if averaging added)
 int numOfSamples = 3;
 
-//Lidar Sensor Pins
+// LIDAR sensor pins (digital pulse input)
 #define frontLdr 8
 #define backLdr 9
 #define leftLdr 10
 #define rightLdr 12
 
-//Sonar Sensor Pins
+// Sonar (HC-SR04 style) pins: TRIG -> output, ECHO -> input
 #define leftSnrTrigPin 4
 #define leftSnrEchoPin 11
 #define rightSnrTrigPin 3
 #define rightSnrEchoPin 2
 
-#define delayUs 20  //delay betwen readings
+#define delayUs 20  // microsecond delay between rapid readings
 
+// Temporary globals for pulse/sonar calculations
 float duration, distance;
 
+// RPC-able sensor data packet. Mirrors the structure expected by M7.
 struct SensorPacket {
     int frontLidar;
     int backLidar;
@@ -30,14 +60,21 @@ struct SensorPacket {
     int rightLidar;
     int leftSonar;
     int rightSonar;
-    // This line tells the RPC library how to pack the data
+    // This macro tells the RPC/MsgPack layer how to serialize fields
     MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, leftSonar, rightSonar);
 };
 
+// Current sensor readings (populated each loop)
 int front, back, left, right;
 int leftSon, rightSon;
 
-// Reading sensor functions
+/*
+  read_lidar(pin)
+  ----------------
+  Read a (short) pulse-width-based LIDAR sensor connected to `pin`.
+  Returns an integer distance in centimeters, or 0 if reading is
+  invalid/out of range.
+*/
 int read_lidar(int pin) {
   int d;
   int16_t t = pulseIn(pin, HIGH);
@@ -46,6 +83,14 @@ int read_lidar(int pin) {
   return d;
 }
 
+/*
+  read_sonar(trigPin, echoPin)
+  -----------------------------
+  Trigger an ultrasonic sensor and measure echo time to estimate
+  distance. Returns distance in centimeters. This implementation
+  assumes a standard HC-SR04 timing and uses globals `duration`
+  and `distance` for intermediate values.
+*/
 int read_sonar(int trigPin, int echoPin){
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
@@ -58,72 +103,57 @@ int read_sonar(int trigPin, int echoPin){
   return(distance);
 }
 
-// int read_sonar(int pin) {
-//   float velocity((331.5 + 0.6 * (float)(20)) * 100 / 1000000.0);
-//   uint16_t distance, pulseWidthUs;
-//   pinMode(pin, OUTPUT);
-//   digitalWrite(pin, LOW);
-//   digitalWrite(pin, HIGH);            //Set the trig pin High
-//   delayMicroseconds(10);              //Delay of 10 microseconds
-//   digitalWrite(pin, LOW);             //Set the trig pin Low
-//   pinMode(pin, INPUT);                //Set the pin to input mode
-//   pulseWidthUs = pulseIn(pin, HIGH);  //Detect the high level time on the echo pin, the output high level time represents the ultrasonic flight time (unit: us)
-//   distance = pulseWidthUs * velocity / 2.0;
-//   if (distance < 0 || distance > 50) { distance = 0; }
-//   return distance;
-// }
-
-// int avgSonar(int pin, int num) {
-//   int sum = 0;
-//   int data;
-//   int distance;
-//   for (int i = 0; i < num; i++) {
-//     data = read_sonar(pin);
-//     sum = sum + data;
-//     delayMicroseconds(delayUs);  //give ADC time to recharge
-//   }
-//   return distance = sum / num;
-// }
-
-
+/*
+  getSensorData()
+  ----------------
+  Package the most-recent sensor readings into a `SensorPacket`
+  and return it. This function is bound to RPC and invoked remotely
+  by the M7 core.
+*/
 SensorPacket getSensorData() {
- SensorPacket data;
-    data.frontLidar = front;   // Replace with your sensor reads later
-    data.backLidar = back;
-    data.leftLidar = left;
-    data.rightLidar = right;
-    data.leftSonar = leftSon;
-    data.rightSonar = rightSon;
-    return data;
+  SensorPacket data;
+  data.frontLidar = front;
+  data.backLidar = back;
+  data.leftLidar = left;
+  data.rightLidar = right;
+  data.leftSonar = leftSon;
+  data.rightSonar = rightSon;
+  return data;
 }
 
+/*
+  setup()
+  -------
+  Initialize RPC, configure sensor pins, and bind the `getSensorData`
+  RPC method so the M7 core can request sensor snapshots.
+*/
 void setup() {
   RPC.begin();
-  // Give the system time to stabilize before binding
+  // Configure LIDAR pins as inputs--pulseIn will read digital pulses
   pinMode(frontLdr, OUTPUT);
   pinMode(backLdr, OUTPUT);
   pinMode(leftLdr, OUTPUT);
   pinMode(rightLdr, OUTPUT);
-  
-  delay(500);
+
+  // Configure sonar trigger pins as OUTPUT and echo pins as INPUT
+  pinMode(leftSnrTrigPin, OUTPUT);
+  pinMode(leftSnrEchoPin, INPUT);
+  pinMode(rightSnrTrigPin, OUTPUT);
+  pinMode(rightSnrEchoPin, INPUT);
+
+  delay(500); // allow sensors and buses to stabilize
   RPC.bind("getSensorData", getSensorData);
-  
-//   distance = pulseWidthUs * velocity / 2.0;
-//   if (distance < 0 || distance > 50) { distance = 0; }
-//   return distance;
-// }
-
-// int avgSonar(int pin, int num) {
-//   int sum = 0;
-//   int data;
-//   int distance;
-//   for (int i = 0; i < num; i++) {
-
 
   pinMode(LEDR, OUTPUT);
-  digitalWrite(LEDR, LOW); // Red ON
+  digitalWrite(LEDR, LOW); // Red ON to indicate M4 online
 }
 
+/*
+  loop()
+  ------
+  Periodically read each sensor and store values in global vars.
+  The `getSensorData` RPC handler uses those globals to build packets.
+*/
 void loop() {
   front = read_lidar(frontLdr);
   back = read_lidar(backLdr);
