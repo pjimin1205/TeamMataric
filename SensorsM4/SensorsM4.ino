@@ -42,10 +42,15 @@ int numOfSamples = 3;
 #define rightLdr 12
 
 // Sonar (HC-SR04 style) pins: TRIG -> output, ECHO -> input
-#define leftSnrTrigPin 4
-#define leftSnrEchoPin 11
-#define rightSnrTrigPin 3
-#define rightSnrEchoPin 2
+#define frontLeftSnrTrigPin 4
+#define frontLeftSnrEchoPin 11
+#define frontRightSnrTrigPin 3
+#define frontRightSnrEchoPin 2
+
+#define backLeftSnrTrigPin 40
+#define backLeftSnrEchoPin 41
+#define backRightSnrTrigPin 42
+#define backRightSnrEchoPin 43
 
 #define delayUs 20  // microsecond delay between rapid readings
 
@@ -58,15 +63,17 @@ struct SensorPacket {
     int backLidar;
     int leftLidar;
     int rightLidar;
-    int leftSonar;
-    int rightSonar;
+    int frontLeftSonar;
+    int frontRightSonar;
+    int backLeftSonar;
+    int backRightSonar;
     // This macro tells the RPC/MsgPack layer how to serialize fields
-    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, leftSonar, rightSonar);
+    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar);
 };
 
 // Current sensor readings (populated each loop)
 int front, back, left, right;
-int leftSon, rightSon;
+int frontLeftSon, frontRightSon, backLeftSon, backRightSon;
 
 /*
   read_lidar(pin)
@@ -116,8 +123,10 @@ SensorPacket getSensorData() {
   data.backLidar = back;
   data.leftLidar = left;
   data.rightLidar = right;
-  data.leftSonar = leftSon;
-  data.rightSonar = rightSon;
+  data.frontLeftSonar = frontLeftSon;
+  data.frontRightSonar = frontRightSon;
+  data.backLeftSonar = backLeftSon;
+  data.backRightSonar = backRightSon;
   return data;
 }
 
@@ -136,10 +145,15 @@ void setup() {
   pinMode(rightLdr, OUTPUT);
 
   // Configure sonar trigger pins as OUTPUT and echo pins as INPUT
-  pinMode(leftSnrTrigPin, OUTPUT);
-  pinMode(leftSnrEchoPin, INPUT);
-  pinMode(rightSnrTrigPin, OUTPUT);
-  pinMode(rightSnrEchoPin, INPUT);
+  pinMode(frontLeftSnrTrigPin, OUTPUT);
+  pinMode(frontLeftSnrEchoPin, INPUT);
+  pinMode(frontRightSnrTrigPin, OUTPUT);
+  pinMode(frontRightSnrEchoPin, INPUT);
+
+  pinMode(backLeftSnrTrigPin, OUTPUT);
+  pinMode(backLeftSnrEchoPin, INPUT);
+  pinMode(backRightSnrTrigPin, OUTPUT);
+  pinMode(backRightSnrEchoPin, INPUT);
 
   delay(500); // allow sensors and buses to stabilize
   RPC.bind("getSensorData", getSensorData);
@@ -159,8 +173,10 @@ void loop() {
   back = read_lidar(backLdr);
   left = read_lidar(leftLdr);
   right = read_lidar(rightLdr);
-  leftSon = read_sonar(leftSnrTrigPin, leftSnrEchoPin);
-  rightSon = read_sonar(rightSnrTrigPin, rightSnrEchoPin);
+  frontLeftSon = read_sonar(frontLeftSnrTrigPin, frontLeftSnrEchoPin);
+  frontRightSon = read_sonar(frontRightSnrTrigPin, frontRightSnrEchoPin);
+  backLeftSon = read_sonar(backLeftSnrTrigPin, backLeftSnrEchoPin);
+  backRightSon = read_sonar(backRightSnrTrigPin, backRightSnrEchoPin);
 }
 
 
