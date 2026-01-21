@@ -35,6 +35,7 @@ MultiStepper steppers;//create instance to control multiple steppers at the same
 #define stepperEnFalse true //variable for disabling stepper motor
 #define max_speed 1500 //maximum stepper motor speed
 #define max_accel 10000 //maximum motor acceleration
+#define base_speed 500
 
 int pauseTime = 2500;   //time before robot moves
 int stepTime = 500;     //delay time between high and low on step pin
@@ -50,6 +51,9 @@ int rightSonarDist = 1000; // default right sonar distance
 int targetFollowDist = 10; //cm
 int minimumFollowingDist = 5; //cm
 int maximumStoppingDist = 10; //cm
+
+int min_deadband_cm = 10;
+int max_deadband_cm = 15;
 
 // Force Constants
 const int MAX_FORCE = 100;
@@ -81,19 +85,48 @@ struct SensorPacket {
     // This line tells the RPC library how to pack the data
     MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar);
 };
-// Sensor interval
 unsigned long lastSensorRequest = 0;
-const long sensorInterval = 100; // Only check sensors every 100ms
-SensorPacket sensorData; // initialize the sensor packet
+const long sensorInterval = 100; // Query sensors every 100 ms
+SensorPacket sensorData;
+bool printSenRead = false; // for debug
+
+/*
+  updateSensorData()
+  -------------------
+  Throttled RPC call to request sensor data from the M4 core and
+  unpack it into `sensorData`. Optionally prints sensor readings
+  when `printSenRead` is enabled.
+  Side-effects: modifies global `sensorData`.
+*/
+void updateSensorData(){
+  // Only talk to the M4 every 100ms
+  if (millis() - lastSensorRequest >= sensorInterval) {
+    lastSensorRequest = millis();
+    auto res = RPC.call("getSensorData");
+    sensorData = res.as<SensorPacket>();
+
+    if(printSenRead){
+      Serial.print("F: "); Serial.print(sensorData.frontLidar);
+      Serial.print(" | B: "); Serial.print(sensorData.backLidar);
+      Serial.print(" | L: "); Serial.print(sensorData.leftLidar);
+      Serial.print(" | R: "); Serial.print(sensorData.rightLidar);
+      Serial.print(" | LSonar: "); Serial.print(sensorData.frontLeftSonar);
+      Serial.print(" | RSonar: "); Serial.print(sensorData.frontRightSonar);
+      Serial.print(" | BLSonar: "); Serial.print(sensorData.backLeftSonar);
+      Serial.print(" | BRSonar: "); Serial.print(sensorData.backRightSonar);
+      Serial.println();
+    }
+  }
+}
 enum BehaviorMode { // Behavior modes
-  LEFT_WALL
-  RIGHT_WALL
-  CENTER
-  AVOID
-  RANDOM_WANDER
+  LEFT_WALL,
+  RIGHT_WALL,
+  CENTER,
+  AVOID,
+  RANDOM_WANDER,
   GO_TO_GOAL
 };
-BehaviorMode currentMode = ;  // Change this to switch modes
+BehaviorMode currentMode = LEFT_WALL;  // Change this to switch modes
 // ------------------------------------- START OF FUNCTIONS ------------------------------------------------------------------
 void init_stepper(){
   pinMode(rtStepPin, OUTPUT);//sets pin as output
@@ -128,6 +161,37 @@ void init_stepper(){
 // -----------------------------------------Layer 2 ------------------------------------------------------------------------
 // -----------------------------------------Layer 1 ------------------------------------------------------------------------
 // follow wall
+void followWall_bang_control(){
+  // find how close something is & what angle robot is pointing
+  
+  int backLeftSonarDist = sensorData.backLeftSonar; // CM
+  int leftLidarDist = sensorData.leftLidar; // CM
+  int frontLeftSonarDist = sensorData.frontLeftSonar*sin(ANGLE_LEFT_SONAR*PI/180); // distance to the left, from the front sensor
+
+    // get angle of robot
+  int height = backLeftSonarDist - leftLidarDist;
+  int base = 8; // CM
+  double angle_rad = atan2(height, base); // atan2(y, x)
+
+  // is in deadband?
+  // if too far from deadband
+    // (frontLeftSonarDist > max_deadband_cm)
+  if((backLeftSonarDist > max_deadband_cm) || (leftLidarDist > max_deadband_cm)){
+    stepperLeft.setSpeed(base_speed);
+    stepperRight.setSpeed(base_speed + 100);
+  }
+  // if too close
+  else if((backLeftSonarDist < min_deadband_cm) || (leftLidarDist < min_deadband_cm) || (frontLeftSonarDist < min_deadband_cm)){
+    stepperLeft.setSpeed(base_speed+100);
+    stepperRight.setSpeed(base_speed);
+  }
+  else{ // in deadband
+    stepperLeft.setSpeed(base_speed);
+    stepperRight.setSpeed(base_speed);
+  }
+  // else lost wall
+  // need to correct motor speed? do in proportional
+}
 
 // -----------------------------------------Layer 0 ------------------------------------------------------------------------
 
@@ -151,5 +215,6 @@ void setup() {
 void loop() {
   stepperLeft.runSpeed();
   stepperRight.runSpeed();
+  followWall_bang_control();
   updateSensorData();
 }
