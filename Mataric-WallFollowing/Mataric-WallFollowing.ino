@@ -66,16 +66,20 @@ const float ANGLE_FRONT_LIDAR = 0.0;     // Front LIDAR at 0 degrees
 const float ANGLE_BACK_LIDAR = 180.0;    // Back LIDAR at 180 degrees
 const float ANGLE_LEFT_LIDAR = 90.0;     // Left LIDAR at 90 degrees
 const float ANGLE_RIGHT_LIDAR = -90.0;   // Right LIDAR at -90 degrees
+const float ANGLE_BACK_LEFT_SONAR = 90.0;
+const float ANGLE_BACK_RIGHT_SONAR = -90.0;
 
 struct SensorPacket {
     int frontLidar;
     int backLidar;
     int leftLidar;
     int rightLidar;
-    int leftSonar;
-    int rightSonar;
+    int frontLeftSonar;
+    int frontRightSonar;
+    int backLeftSonar;
+    int backRightSonar;
     // This line tells the RPC library how to pack the data
-    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, leftSonar, rightSonar);
+    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar);
 };
 // Sensor interval
 unsigned long lastSensorRequest = 0;
