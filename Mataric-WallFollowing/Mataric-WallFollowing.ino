@@ -35,7 +35,7 @@ MultiStepper steppers;//create instance to control multiple steppers at the same
 #define stepperEnFalse true //variable for disabling stepper motor
 #define max_speed 1500 //maximum stepper motor speed
 #define max_accel 10000 //maximum motor acceleration
-#define base_speed 500
+#define base_speed 400
 
 int pauseTime = 2500;   //time before robot moves
 int stepTime = 500;     //delay time between high and low on step pin
@@ -63,6 +63,13 @@ const float K_REPULSIVE = 200.0;
 float forceVectorx = 0;
 float forceVectory = 0;
 float forceVectorAngle = 0;
+
+struct MotorCommand{
+  int leftSpeed;
+  int rightSpeed;
+  bool active;
+}
+
 // ------------------------------------- Sensors -------------------------------------------------------------------
 const float ANGLE_LEFT_SONAR = 45.0;     // Left sonar at 45 degrees
 const float ANGLE_RIGHT_SONAR = -45.0;   // Right sonar at -45 degrees
@@ -118,7 +125,18 @@ void updateSensorData(){
     }
   }
 }
-enum BehaviorMode { // Behavior modes
+void updateNavState() {
+  if (sensorData.frontLidar < maximumStoppingDist) return; // let avoidance handle it
+
+  // if no walls are detected on sides, go to random wander
+  if (navState == LEFT_WALL && sensorData.leftLidar == 0) {
+    navState = RANDOM_WANDER;
+  }
+  else if (navState == CENTER && sensorData.rightLidar < 20) {
+    navState = RIGHT_WALL;
+  }
+}
+enum NavState { // state machine, only affects goal/navigation behaviors
   LEFT_WALL,
   RIGHT_WALL,
   CENTER,
@@ -126,7 +144,7 @@ enum BehaviorMode { // Behavior modes
   RANDOM_WANDER,
   GO_TO_GOAL
 };
-BehaviorMode currentMode = LEFT_WALL;  // Change this to switch modes
+NavState currState = LEFT_WALL;  // Change this to switch modes
 // ------------------------------------- START OF FUNCTIONS ------------------------------------------------------------------
 void init_stepper(){
   pinMode(rtStepPin, OUTPUT);//sets pin as output
@@ -157,46 +175,116 @@ void init_stepper(){
   digitalWrite(stepperEnable, stepperEnTrue);//turns on the stepper motor driver
   digitalWrite(enableLED, HIGH);//turn on enable LED
 }
+
 // -----------------------------------------Layer 3 ------------------------------------------------------------------------
 // -----------------------------------------Layer 2 ------------------------------------------------------------------------
+// example
+MotorCommand goalBehavior(){
+  switch (navState){
+    case LEFT_WALL:
+      return followLeftWall();
+    case RIGHT_WALL:
+      return followRightWall();
+    case CENTER:
+      return driveCenter();
+    case GO_TO_GOAL:
+      return goToGoal();
+    case RANDOM_WANDER:
+      return wander();
+    default:
+      return {base_speed, base_speed, true};
+  }
+}
+
 // -----------------------------------------Layer 1 ------------------------------------------------------------------------
-// follow wall
-void followWall_bang_control(){
-  // find how close something is & what angle robot is pointing
-  
+// follow left wall
+MotorCommand followLeftWallBang(){
+  MotorCommand cmd = {base_speed, base_speed, true};
+
   int backLeftSonarDist = sensorData.backLeftSonar; // CM
   int leftLidarDist = sensorData.leftLidar; // CM
   int frontLeftSonarDist = sensorData.frontLeftSonar*sin(ANGLE_LEFT_SONAR*PI/180); // distance to the left, from the front sensor
 
-    // get angle of robot
-  int height = backLeftSonarDist - leftLidarDist;
-  int base = 8; // CM
-  double angle_rad = atan2(height, base); // atan2(y, x)
+  // if too far from left deadband
+  if(leftLidarDist > max_deadband_cm){
+    cmd.rightSpeed = base_speed + 100;
+  }
+  // if too close to left
+  else if(leftLidarDist < min_deadband_cm || frontLeftSonarDist < min_deadband_cm){
+    cmd.leftSpeed = base_speed + 100;
+  }
+  else{} // in left deadband
+  // if sensors don't detect left wall/object, then it's in RANDOM WANDER state
+  return cmd;
+}
+// Proportional Control 
+MotorCommand followLeftWallP(){
+  MotorCommand cmd = {base_speed, base_speed, true};
 
-  // is in deadband?
-  // if too far from deadband
-    // (frontLeftSonarDist > max_deadband_cm)
-  if((backLeftSonarDist > max_deadband_cm) || (leftLidarDist > max_deadband_cm)){
-    stepperLeft.setSpeed(base_speed);
-    stepperRight.setSpeed(base_speed + 100);
+  const float desiredDist = 12.0;   // cm, between 10, 15 cm
+  const float Kp = 10.0;             // tuning gain
+
+  float leftLiDist = sensorData.leftLidar;
+  float distError = desiredDist - leftLiDist;
+
+  float turn = Kp * distError;
+  turn = constrain(turn, -100, 100);
+
+  cmd.leftSpeed  = base_speed + turn;
+  cmd.rightSpeed = base_speed - turn;
+
+  return cmd;
+}
+// PD Control (uses angle to approximate behavior)
+MotorCommand followLeftWallPD() {
+  MotorCommand cmd = {base_speed, base_speed, true};
+
+  const float desiredDist = 12.0; // cm
+  const float Kp = 12.0;          // distance gain: 10-15
+  const float Kd = 80.0;          // angle gain (radians!): 50-100
+
+  float leftDist = sensorData.leftLidar;
+  float backLeft = sensorData.backLeftSonar;
+
+  float distError = desiredDist - leftDist;
+
+  // Angle error (already computed in your bang code)
+  float height = leftDist - backLeft; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
+  float base = 8.0; // cm between sensors
+  float angleError = atan2(height, base); // radians
+
+  float turn = (Kp * distError) + (Kd * angleError);
+  turn = constrain(turn, -150, 150);
+
+  cmd.leftSpeed  = base_speed - turn;
+  cmd.rightSpeed = base_speed + turn;
+
+  return cmd;
+}
+
+// if robot detects object too close, closer than deadband, use force vectors to move away
+MotorCommand avoidObstacle(){
+  MotorCommand cmd = {0,0,false};
+  if(sensorData.frontLidar < 20){
+    cmd.leftSpeed = base_speed + 200;
+    cmd.rightSpeed = base_speed - 200;
+    cmd.active = true;
   }
-  // if too close
-  else if((backLeftSonarDist < min_deadband_cm) || (leftLidarDist < min_deadband_cm) || (frontLeftSonarDist < min_deadband_cm)){
-    stepperLeft.setSpeed(base_speed+100);
-    stepperRight.setSpeed(base_speed);
-  }
-  else{ // in deadband
-    stepperLeft.setSpeed(base_speed);
-    stepperRight.setSpeed(base_speed);
-  }
-  // else lost wall
-  // need to correct motor speed? do in proportional
+  return cmd;
 }
 
 // -----------------------------------------Layer 0 ------------------------------------------------------------------------
-
-//void avoid
-
+// robot detects object too close, stops the robot
+// moves backwards for a time, checks 
+MotorCommand collide(){
+  MotorCommand cmd = {0, 0, false};
+  if(sensorData.frontLidar < 5 || sensorData.frontLeftSonar < 5 || sensorData.frontRightSonar < 5){
+    cmd.leftSpeed = 0;
+    cmd.rightSpeed = 0;
+    cmd.active = true; // inhibits others
+  }
+  return cmd;
+}
 
 // -------------------------------------- Main --------------------------------------------------------------------------------
 void setup() {
@@ -213,8 +301,43 @@ void setup() {
 }
 
 void loop() {
-  stepperLeft.runSpeed();
-  stepperRight.runSpeed();
-  followWall_bang_control();
   updateSensorData();
+  updateNavState(); // slow logic (not reflexes like subsumption), no motor calls
+  MotorCommand cmd = {base_speed, base_speed, true}; // default behavior
+  // ----------------------------------------------------------------------------
+  // SUBSUMPTION ARCHITECTURE: highest priority first, add complex layers to bottom
+    // simple reactive behaviors first, complex states afterwards
+  MotorCommand c;
+  /*
+  // layer 0
+  c = collide();
+  if(cmd.active){
+    cmd = c;
+    goto APPLY; // skips the rest of the code, goes to APPLY
+  }
+  // layer 1
+  c = avoidObstacle();
+  if(cmd.active){
+    cmd = c;
+    goto APPLY;
+  }
+  */
+  c = followLeftWallBang(); // after this works, try P version
+  if(c.active){
+    cmd = c;
+  }
+  /*
+  // layer 2
+  // go to goal
+  c = goalBehavior();
+  if(c.active){
+    cmd = c;
+  }
+  */
+  // -----------------------------------------------------------------------------
+  APPLY:
+    stepperLeft.setSpeed(cmd.leftSpeed);
+    stepperRight.setSpeed(cmd.rightSpeed);
+    stepperLeft.runSpeed();
+    stepperRight.runSpeed();
 }
