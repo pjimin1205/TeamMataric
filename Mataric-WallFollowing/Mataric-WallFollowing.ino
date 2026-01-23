@@ -35,7 +35,7 @@ MultiStepper steppers;//create instance to control multiple steppers at the same
 #define stepperEnFalse true //variable for disabling stepper motor
 #define max_speed 1500 //maximum stepper motor speed
 #define max_accel 10000 //maximum motor acceleration
-#define base_speed 400
+#define base_speed 500
 
 int pauseTime = 2500;   //time before robot moves
 int stepTime = 500;     //delay time between high and low on step pin
@@ -68,7 +68,7 @@ struct MotorCommand{
   int leftSpeed;
   int rightSpeed;
   bool active;
-}
+};
 
 // ------------------------------------- Sensors -------------------------------------------------------------------
 const float ANGLE_LEFT_SONAR = 45.0;     // Left sonar at 45 degrees
@@ -125,17 +125,6 @@ void updateSensorData(){
     }
   }
 }
-void updateNavState() {
-  if (sensorData.frontLidar < maximumStoppingDist) return; // let avoidance handle it
-
-  // if no walls are detected on sides, go to random wander
-  if (navState == LEFT_WALL && sensorData.leftLidar == 0) {
-    navState = RANDOM_WANDER;
-  }
-  else if (navState == CENTER && sensorData.rightLidar < 20) {
-    navState = RIGHT_WALL;
-  }
-}
 enum NavState { // state machine, only affects goal/navigation behaviors
   LEFT_WALL,
   RIGHT_WALL,
@@ -144,7 +133,28 @@ enum NavState { // state machine, only affects goal/navigation behaviors
   RANDOM_WANDER,
   GO_TO_GOAL
 };
-NavState currState = LEFT_WALL;  // Change this to switch modes
+NavState currState = RANDOM_WANDER;  // Change this to switch modes
+
+void updateNavState() {
+  if (sensorData.frontLidar < maximumStoppingDist) return; // let avoidance handle it
+
+  // if loses left wall, go to random wander
+  if (currState == LEFT_WALL && sensorData.leftLidar == 0) {
+    currState = RANDOM_WANDER;
+  }
+  // else if (currState != CENTER && sensorData.rightLidar < 20 && sensorData.leftLidar < 20){
+  //   currState = CENTER;
+  // }
+  // if left wall is detected, follow it
+  else if (currState != LEFT_WALL && sensorData.rightLidar < 20){
+    currState = LEFT_WALL;
+  }
+  // if right wall is detected, follow it
+  else if (currState != RIGHT_WALL && sensorData.leftLidar < 20){
+    currState = RIGHT_WALL;
+  }
+}
+
 // ------------------------------------- START OF FUNCTIONS ------------------------------------------------------------------
 void init_stepper(){
   pinMode(rtStepPin, OUTPUT);//sets pin as output
@@ -177,28 +187,37 @@ void init_stepper(){
 }
 
 // -----------------------------------------Layer 3 ------------------------------------------------------------------------
+MotorCommand randomWander(){
+  digitalWrite(redLED, LOW);//turn on red LED
+  digitalWrite(ylwLED, LOW);//turn on yellow LED
+  digitalWrite(grnLED, LOW);//turn on green LED
+  
+}
 // -----------------------------------------Layer 2 ------------------------------------------------------------------------
 // example
-MotorCommand goalBehavior(){
-  switch (navState){
+// collection of layer 1 movements, this is layer 2 because it has logic.
+MotorCommand moveBehavior(){
+  switch (currState){
     case LEFT_WALL:
-      return followLeftWall();
+      return followLeftWallPD();
     case RIGHT_WALL:
-      return followRightWall();
-    case CENTER:
-      return driveCenter();
-    case GO_TO_GOAL:
-      return goToGoal();
-    case RANDOM_WANDER:
-      return wander();
+      return followRightWallPD();
+    // case CENTER:
+    //   return driveCenter();
+    // case GO_TO_GOAL:
+    //   return goToGoal();
+    // case RANDOM_WANDER:
+    //   return randomWander();
     default:
       return {base_speed, base_speed, true};
   }
 }
+MotorCommand followCenter(){
 
+}
 // -----------------------------------------Layer 1 ------------------------------------------------------------------------
-// follow left wall
-MotorCommand followLeftWallBang(){
+// follow right wall
+MotorCommand followRightWallBang(){
   MotorCommand cmd = {base_speed, base_speed, true};
 
   int backLeftSonarDist = sensorData.backLeftSonar; // CM
@@ -207,18 +226,28 @@ MotorCommand followLeftWallBang(){
 
   // if too far from left deadband
   if(leftLidarDist > max_deadband_cm){
-    cmd.rightSpeed = base_speed + 100;
+    Serial.print("dist: ");
+    Serial.print(leftLidarDist);
+    Serial.println(" | too far");
+    cmd.rightSpeed = base_speed + 125;
   }
   // if too close to left
-  else if(leftLidarDist < min_deadband_cm || frontLeftSonarDist < min_deadband_cm){
-    cmd.leftSpeed = base_speed + 100;
+  else if(leftLidarDist < min_deadband_cm && leftLidarDist > 0){
+    Serial.print("dist: ");
+    Serial.print(leftLidarDist);
+    Serial.println(" | too close");
+    cmd.leftSpeed = base_speed + 125;
   }
-  else{} // in left deadband
+  else{
+    Serial.print("dist: ");
+    Serial.print(leftLidarDist);
+    Serial.println(" | gooooood");
+  } // in left deadband
   // if sensors don't detect left wall/object, then it's in RANDOM WANDER state
   return cmd;
 }
 // Proportional Control 
-MotorCommand followLeftWallP(){
+MotorCommand followRightWallP(){
   MotorCommand cmd = {base_speed, base_speed, true};
 
   const float desiredDist = 12.0;   // cm, between 10, 15 cm
@@ -228,19 +257,22 @@ MotorCommand followLeftWallP(){
   float distError = desiredDist - leftLiDist;
 
   float turn = Kp * distError;
-  turn = constrain(turn, -100, 100);
+  turn = constrain(turn, -125, 125);
 
   cmd.leftSpeed  = base_speed + turn;
   cmd.rightSpeed = base_speed - turn;
 
   return cmd;
 }
-// PD Control (uses angle to approximate behavior)
-MotorCommand followLeftWallPD() {
+// PD Control (uses angle to approximate behavior instead of time)
+MotorCommand followRightWallPD() {
   MotorCommand cmd = {base_speed, base_speed, true};
+  digitalWrite(redLED, LOW);//turn on red LED
+  digitalWrite(ylwLED, HIGH);//turn on yellow LED
+  digitalWrite(grnLED, LOW);//turn on green LED
 
   const float desiredDist = 12.0; // cm
-  const float Kp = 12.0;          // distance gain: 10-15
+  const float Kp = 10.0;          // distance gain: 10-15
   const float Kd = 80.0;          // angle gain (radians!): 50-100
 
   float leftDist = sensorData.leftLidar;
@@ -254,14 +286,43 @@ MotorCommand followLeftWallPD() {
   float angleError = atan2(height, base); // radians
 
   float turn = (Kp * distError) + (Kd * angleError);
-  turn = constrain(turn, -150, 150);
+  turn = constrain(turn, -125, 125);
+
+  cmd.leftSpeed  = base_speed + turn;
+  cmd.rightSpeed = base_speed - turn;
+
+  return cmd;
+}
+// PD Control (uses angle to approximate behavior instead of time)
+MotorCommand followLeftWallPD() {
+  MotorCommand cmd = {base_speed, base_speed, true};
+  
+  digitalWrite(redLED, LOW);//turn on red LED
+  digitalWrite(ylwLED, LOW);//turn on yellow LED
+  digitalWrite(grnLED, HIGH);//turn on green LED
+
+  const float desiredDist = 12.0; // cm
+  const float Kp = 10.0;          // distance gain: 10-15
+  const float Kd = 80.0;          // angle gain (radians!): 50-100
+
+  float leftDist = sensorData.rightLidar;
+  float backLeft = sensorData.backRightSonar;
+
+  float distError = desiredDist - leftDist;
+
+  // Angle error (already computed in your bang code)
+  float height = leftDist - backLeft; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
+  float base = 8.0; // cm between sensors
+  float angleError = atan2(height, base); // radians
+
+  float turn = (Kp * distError) + (Kd * angleError);
+  turn = constrain(turn, -125, 125);
 
   cmd.leftSpeed  = base_speed - turn;
   cmd.rightSpeed = base_speed + turn;
 
   return cmd;
 }
-
 // if robot detects object too close, closer than deadband, use force vectors to move away
 MotorCommand avoidObstacle(){
   MotorCommand cmd = {0,0,false};
@@ -272,7 +333,6 @@ MotorCommand avoidObstacle(){
   }
   return cmd;
 }
-
 // -----------------------------------------Layer 0 ------------------------------------------------------------------------
 // robot detects object too close, stops the robot
 // moves backwards for a time, checks 
@@ -322,9 +382,10 @@ void loop() {
     goto APPLY;
   }
   */
-  c = followLeftWallBang(); // after this works, try P version
+  c = moveBehavior();
   if(c.active){
     cmd = c;
+    goto APPLY;
   }
   /*
   // layer 2
@@ -336,8 +397,8 @@ void loop() {
   */
   // -----------------------------------------------------------------------------
   APPLY:
-    stepperLeft.setSpeed(cmd.leftSpeed);
-    stepperRight.setSpeed(cmd.rightSpeed);
+    stepperLeft.setSpeed(-cmd.leftSpeed);
+    stepperRight.setSpeed(-cmd.rightSpeed);
     stepperLeft.runSpeed();
     stepperRight.runSpeed();
 }
