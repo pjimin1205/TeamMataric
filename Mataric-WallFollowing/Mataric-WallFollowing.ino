@@ -134,25 +134,56 @@ enum NavState { // state machine, only affects goal/navigation behaviors
   GO_TO_GOAL
 };
 NavState currState = RANDOM_WANDER;  // Change this to switch modes
+int wallLostTimestamp = 0;
 
 void updateNavState() {
-  if (sensorData.frontLidar < maximumStoppingDist) return; // let avoidance handle it
-
-  // if loses left wall, go to random wander
-  if (currState == LEFT_WALL && sensorData.leftLidar == 0) {
+  
+  if (sensorData.frontLidar < maximumStoppingDist && sensorData.backLidar > 0) return; // // Stay in current state but let avoidance handle it
+  Serial.println(currState);
+  bool leftWallPresent = (sensorData.rightLidar > 0 && sensorData.rightLidar < 30);
+  bool rightWallPresent = (sensorData.leftLidar > 0 && sensorData.leftLidar < 30);
+  /*
+  // if loses a wall, go to random wander
+  if (currState == LEFT_WALL && !leftWallPresent) {
     currState = RANDOM_WANDER;
   }
-  // else if (currState != CENTER && sensorData.rightLidar < 20 && sensorData.leftLidar < 20){
-  //   currState = CENTER;
-  // }
-  // if left wall is detected, follow it
+  if (currState == RIGHT_WALL && !rightWallPresent) {
+    currState = RANDOM_WANDER;
+  }
+  // if left wall in follow range, follow it
   else if (currState != LEFT_WALL && sensorData.rightLidar < 20){
     currState = LEFT_WALL;
   }
-  // if right wall is detected, follow it
+  // if left wall is lost, we have gone past a corner
+
+  // if right wall in follow range, follow it
   else if (currState != RIGHT_WALL && sensorData.leftLidar < 20){
     currState = RIGHT_WALL;
   }
+  // if right wall is lost, we have gone past a corner
+  */
+  // /*
+  if(leftWallPresent && rightWallPresent){ // sees both walls
+    currState = CENTER;
+    wallLostTimestamp = 0;
+  }
+  else if(leftWallPresent){ // sees left wall
+    currState = LEFT_WALL;
+    wallLostTimestamp = 0;
+  }
+  else if(rightWallPresent){ // sees right wall
+    currState = RIGHT_WALL;
+    wallLostTimestamp = 0;
+  }
+  else{ // doesn't see any wall
+    if(wallLostTimestamp == 0){
+      wallLostTimestamp = millis();
+    }
+    else if(millis() - wallLostTimestamp > 5000){ // for an extended period of time
+      currState = RANDOM_WANDER;
+    }
+  }
+  // */
 }
 
 // ------------------------------------- START OF FUNCTIONS ------------------------------------------------------------------
@@ -188,9 +219,9 @@ void init_stepper(){
 
 // -----------------------------------------Layer 3 ------------------------------------------------------------------------
 MotorCommand randomWander(){
-  digitalWrite(redLED, LOW);//turn on red LED
-  digitalWrite(ylwLED, LOW);//turn on yellow LED
-  digitalWrite(grnLED, LOW);//turn on green LED
+  digitalWrite(redLED, HIGH);//turn on red LED
+  digitalWrite(ylwLED, HIGH);//turn on yellow LED
+  digitalWrite(grnLED, HIGH);//turn on green LED
   
 }
 // -----------------------------------------Layer 2 ------------------------------------------------------------------------
@@ -202,8 +233,8 @@ MotorCommand moveBehavior(){
       return followLeftWallPD();
     case RIGHT_WALL:
       return followRightWallPD();
-    // case CENTER:
-    //   return driveCenter();
+    case CENTER:
+      return followCenter();
     // case GO_TO_GOAL:
     //   return goToGoal();
     // case RANDOM_WANDER:
@@ -213,7 +244,34 @@ MotorCommand moveBehavior(){
   }
 }
 MotorCommand followCenter(){
+  MotorCommand cmd = {base_speed, base_speed, true};
 
+  // LED Requirement: Turn on ALL 3 LEDs when following center [cite: 244, 269]
+  digitalWrite(redLED, HIGH);
+  digitalWrite(ylwLED, LOW);
+  digitalWrite(grnLED, LOW);
+
+  // Distances (Adjust sensor mapping based on your specific robot setup)
+  // Based on your previous code: rightLidar is on the left, leftLidar is on the right
+  float leftDist = sensorData.rightLidar; 
+  float rightDist = sensorData.leftLidar;
+
+  // Calculate the error: Difference between the two distances [cite: 30]
+  // A positive error means we are closer to the right wall
+  float error = leftDist - rightDist;
+
+  // Proportional gain (Suggested between 1 and 10) [cite: 44, 199]
+  const float Kp_center = 8.0; 
+  float turn = Kp_center * error;
+
+  // Constrain turn to prevent overwhelming base speed [cite: 31]
+  turn = constrain(turn, -125, 125);
+
+  // Apply steering logic
+  cmd.leftSpeed  = base_speed + turn;
+  cmd.rightSpeed = base_speed - turn;
+
+  return cmd;
 }
 // -----------------------------------------Layer 1 ------------------------------------------------------------------------
 // follow right wall
@@ -321,31 +379,62 @@ MotorCommand followLeftWallPD() {
   cmd.leftSpeed  = base_speed - turn;
   cmd.rightSpeed = base_speed + turn;
 
+  // if we lost the wall, turn left
+  if (leftDist <= 0 || leftDist > 50.0) {
+    // Perform a circle motion: Left wheel slow, Right wheel fast 
+    // to arc back toward where the wall should be.
+    cmd.leftSpeed  = base_speed * 1.2; 
+    cmd.rightSpeed = base_speed * 0.4;
+    return cmd; 
+  }
+
   return cmd;
 }
 // if robot detects object too close, closer than deadband, use force vectors to move away
 MotorCommand avoidObstacle(){
-  MotorCommand cmd = {0,0,false};
-  if(sensorData.frontLidar < 20){
-    cmd.leftSpeed = base_speed + 200;
-    cmd.rightSpeed = base_speed - 200;
+  MotorCommand cmd = {0, 0, false};
+  int sensorThreshold = 15; // Start avoiding at 25cm
+  int avoidTurnSpeed = 400;
+
+  // Check rear sensors (since we are moving backwards)
+  int distCenter = sensorData.backLidar;
+  int distL = sensorData.rightLidar;
+  int distR = sensorData.leftLidar;
+
+  // If something is detected in our path of travel
+  if ((distCenter > 0 && distCenter < sensorThreshold) || 
+      (distL > 0 && distL < 15) || 
+      (distR > 0 && distR < 15)) {
+    
     cmd.active = true;
+
+    // Logic: If obstacle is more to the Left, turn Right (and vice versa)
+    // Remember: While reversing, to turn the "rear" Right, 
+    // the Right wheel slows down and the Left wheel speeds up.
+    if (distL < distR) {
+      // Obstacle on left side, steer right
+      cmd.leftSpeed = avoidTurnSpeed;
+      cmd.rightSpeed = -avoidTurnSpeed;
+    } else {
+      // Obstacle on right side, steer left
+      cmd.leftSpeed = -avoidTurnSpeed;
+      cmd.rightSpeed = avoidTurnSpeed;
+    }
   }
   return cmd;
 }
 // -----------------------------------------Layer 0 ------------------------------------------------------------------------
 // robot detects object too close, stops the robot
-// moves backwards for a time, checks 
 MotorCommand collide(){
   MotorCommand cmd = {0, 0, false};
-  if(sensorData.frontLidar < 5 || sensorData.frontLeftSonar < 5 || sensorData.frontRightSonar < 5){
+  // Panic stop if anything is within 8cm of the rear while reversing
+  if(sensorData.backLidar > 0 && sensorData.backLidar < 8){
     cmd.leftSpeed = 0;
     cmd.rightSpeed = 0;
-    cmd.active = true; // inhibits others
+    cmd.active = true;
   }
   return cmd;
 }
-
 // -------------------------------------- Main --------------------------------------------------------------------------------
 void setup() {
   Serial.begin(115200);
@@ -362,40 +451,33 @@ void setup() {
 
 void loop() {
   updateSensorData();
-  updateNavState(); // slow logic (not reflexes like subsumption), no motor calls
-  MotorCommand cmd = {base_speed, base_speed, true}; // default behavior
-  // ----------------------------------------------------------------------------
-  // SUBSUMPTION ARCHITECTURE: highest priority first, add complex layers to bottom
-    // simple reactive behaviors first, complex states afterwards
+  updateNavState();
+  
+  // Start with a default forward (backward-moving) command
+  MotorCommand cmd = {base_speed, base_speed, true}; 
   MotorCommand c;
-  /*
-  // layer 0
+
+  // --- LAYER 0: COLLISION (Highest Priority) ---
   c = collide();
-  if(cmd.active){
+  if(c.active){
     cmd = c;
-    goto APPLY; // skips the rest of the code, goes to APPLY
+    goto APPLY; 
   }
-  // layer 1
+
+  // --- LAYER 1: OBSTACLE AVOIDANCE ---
   c = avoidObstacle();
-  if(cmd.active){
+  if(c.active){
     cmd = c;
     goto APPLY;
   }
-  */
+
+  // --- LAYER 2: NAVIGATION (Wall Following / Center) ---
   c = moveBehavior();
   if(c.active){
     cmd = c;
     goto APPLY;
   }
-  /*
-  // layer 2
-  // go to goal
-  c = goalBehavior();
-  if(c.active){
-    cmd = c;
-  }
-  */
-  // -----------------------------------------------------------------------------
+
   APPLY:
     stepperLeft.setSpeed(-cmd.leftSpeed);
     stepperRight.setSpeed(-cmd.rightSpeed);
