@@ -50,7 +50,7 @@ int rightSonarDist = 1000; // default right sonar distance
 
 int targetFollowDist = 10; //cm
 int minimumFollowingDist = 5; //cm
-int maximumStoppingDist = 10; //cm
+int maximumStoppingDist = 20; //cm
 
 int min_deadband_cm = 10;
 int max_deadband_cm = 15;
@@ -135,34 +135,17 @@ enum NavState { // state machine, only affects goal/navigation behaviors
 };
 NavState currState = RANDOM_WANDER;  // Change this to switch modes
 int wallLostTimestamp = 0;
+int stateDelay = 5000; // 5000 -> 0 ms, delays state for 5000 ms
+int preventTime = 0;
 
 void updateNavState() {
   
-  if (sensorData.frontLidar < maximumStoppingDist && sensorData.backLidar > 0) return; // // Stay in current state but let avoidance handle it
+  if (sensorData.backLidar < maximumStoppingDist && sensorData.backLidar > 0
+    || millis() - preventTime < stateDelay) return; // // Stay in current state but let avoidance handle it
   Serial.println(currState);
   bool leftWallPresent = (sensorData.rightLidar > 0 && sensorData.rightLidar < 30);
   bool rightWallPresent = (sensorData.leftLidar > 0 && sensorData.leftLidar < 30);
-  /*
-  // if loses a wall, go to random wander
-  if (currState == LEFT_WALL && !leftWallPresent) {
-    currState = RANDOM_WANDER;
-  }
-  if (currState == RIGHT_WALL && !rightWallPresent) {
-    currState = RANDOM_WANDER;
-  }
-  // if left wall in follow range, follow it
-  else if (currState != LEFT_WALL && sensorData.rightLidar < 20){
-    currState = LEFT_WALL;
-  }
-  // if left wall is lost, we have gone past a corner
-
-  // if right wall in follow range, follow it
-  else if (currState != RIGHT_WALL && sensorData.leftLidar < 20){
-    currState = RIGHT_WALL;
-  }
-  // if right wall is lost, we have gone past a corner
-  */
-  // /*
+ 
   if(leftWallPresent && rightWallPresent){ // sees both walls
     currState = CENTER;
     wallLostTimestamp = 0;
@@ -393,7 +376,7 @@ MotorCommand followLeftWallPD() {
 // if robot detects object too close, closer than deadband, use force vectors to move away
 MotorCommand avoidObstacle(){
   MotorCommand cmd = {0, 0, false};
-  int sensorThreshold = 15; // Start avoiding at 25cm
+  int sensorThreshold = 25; // Start avoiding at 25cm
   int avoidTurnSpeed = 400;
 
   // Check rear sensors (since we are moving backwards)
@@ -402,24 +385,28 @@ MotorCommand avoidObstacle(){
   int distR = sensorData.leftLidar;
 
   // If something is detected in our path of travel
-  if ((distCenter > 0 && distCenter < sensorThreshold) || 
-      (distL > 0 && distL < 15) || 
-      (distR > 0 && distR < 15)) {
-    
+  if ((distCenter > 0 && distCenter < sensorThreshold)
+      || (distL > 0 && distL < 15)
+      || (distR > 0 && distR < 15)
+      || millis() - preventTime < stateDelay) {
     cmd.active = true;
+    preventTime = millis(); // prevent state changes for a bit
+    
+    digitalWrite(enableLED, HIGH);
 
     // Logic: If obstacle is more to the Left, turn Right (and vice versa)
-    // Remember: While reversing, to turn the "rear" Right, 
-    // the Right wheel slows down and the Left wheel speeds up.
     if (distL < distR) {
       // Obstacle on left side, steer right
-      cmd.leftSpeed = avoidTurnSpeed;
-      cmd.rightSpeed = -avoidTurnSpeed;
+      cmd.leftSpeed = base_speed + avoidTurnSpeed;
+      cmd.rightSpeed = base_speed - avoidTurnSpeed;
     } else {
       // Obstacle on right side, steer left
-      cmd.leftSpeed = -avoidTurnSpeed;
-      cmd.rightSpeed = avoidTurnSpeed;
+      cmd.leftSpeed = base_speed - avoidTurnSpeed;
+      cmd.rightSpeed = base_speed + avoidTurnSpeed;
     }
+  }
+  if(!cmd.active){
+    digitalWrite(enableLED, LOW);
   }
   return cmd;
 }
@@ -427,12 +414,45 @@ MotorCommand avoidObstacle(){
 // robot detects object too close, stops the robot
 MotorCommand collide(){
   MotorCommand cmd = {0, 0, false};
-  // Panic stop if anything is within 8cm of the rear while reversing
-  if(sensorData.backLidar > 0 && sensorData.backLidar < 8){
+  int wallDetectDist = 10;
+  float speedMod = 2;
+  unsigned long collisionRecoveryTimer = 0;
+  const int retreatDuration = 4000; // Move forward for 1 seconds
+  
+  // 1. Check for immediate collision while reversing
+  if (sensorData.backLidar > 0 && sensorData.backLidar < 8) {
     cmd.leftSpeed = 0;
     cmd.rightSpeed = 0;
     cmd.active = true;
+    // collisionRecoveryTimer = millis(); // Start/Reset retreat timer
   }
+
+  /*
+  // 2. If we are within the retreat window, move FORWARD
+  if ((millis() - collisionRecoveryTimer < retreatDuration)) {
+    // To move forward, we need the opposite of our base_speed
+    // will not move backward if path is blocked
+    // because your APPLY section uses -cmd.speed
+    if(sensorData.rightLidar < sensorData.leftLidar){
+      cmd.leftSpeed = -base_speed; 
+      cmd.rightSpeed = -base_speed*speedMod;
+    } else if(sensorData.leftLidar < sensorData.rightLidar){
+      cmd.leftSpeed = -base_speed*speedMod; 
+      cmd.rightSpeed = -base_speed;
+    } else{
+      cmd.leftSpeed = -base_speed; 
+      cmd.rightSpeed = -base_speed;
+    }
+    
+    cmd.active = true;
+    
+    // Visual indicator of collision retreat
+    digitalWrite(redLED, HIGH); 
+  } else {
+    digitalWrite(redLED, LOW);
+  }
+  */
+
   return cmd;
 }
 // -------------------------------------- Main --------------------------------------------------------------------------------
