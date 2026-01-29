@@ -50,7 +50,7 @@ int rightSonarDist = 1000; // default right sonar distance
 
 int targetFollowDist = 10; //cm
 int minimumFollowingDist = 5; //cm
-int maximumStoppingDist = 20; //cm
+int maximumStoppingDist = 25; //cm
 
 int min_deadband_cm = 10;
 int max_deadband_cm = 15;
@@ -80,6 +80,8 @@ const float ANGLE_RIGHT_LIDAR = -90.0;   // Right LIDAR at -90 degrees
 const float ANGLE_BACK_LEFT_SONAR = 90.0;
 const float ANGLE_BACK_RIGHT_SONAR = -90.0;
 
+bool sensorsReady = false; // Flag to indicate if sensors have been initialized
+
 struct SensorPacket {
     int frontLidar;
     int backLidar;
@@ -95,7 +97,7 @@ struct SensorPacket {
 unsigned long lastSensorRequest = 0;
 const long sensorInterval = 100; // Query sensors every 100 ms
 SensorPacket sensorData;
-bool printSenRead = false; // for debug
+bool printSenRead = true; // for debug
 
 /*
   updateSensorData()
@@ -135,14 +137,19 @@ enum NavState { // state machine, only affects goal/navigation behaviors
 };
 NavState currState = RANDOM_WANDER;  // Change this to switch modes
 int wallLostTimestamp = 0;
-int stateDelay = 5000; // 5000 -> 0 ms, delays state for 5000 ms
-int preventTime = 0;
+int stateDelay = 500; // 5000 -> 0 ms, delays state for 5000 ms
+int preventTime = -5000;
 
-void updateNavState() {
-  
-  if (sensorData.backLidar < maximumStoppingDist && sensorData.backLidar > 0
-    || millis() - preventTime < stateDelay) return; // // Stay in current state but let avoidance handle it
-  Serial.println(currState);
+int randomWanderTimer = 0;
+# define randomWanderInterval 1000
+
+void updateNavState() {   
+    if (sensorData.backLidar < maximumStoppingDist && sensorData.backLidar > 0
+    || millis() - preventTime < stateDelay){
+      // avoidFlag == true;
+      // avoidStartTime = millis();   
+      return;// Stay in current state but let avoidance handle it
+    }
   bool leftWallPresent = (sensorData.rightLidar > 0 && sensorData.rightLidar < 30);
   bool rightWallPresent = (sensorData.leftLidar > 0 && sensorData.leftLidar < 30);
  
@@ -162,7 +169,7 @@ void updateNavState() {
     if(wallLostTimestamp == 0){
       wallLostTimestamp = millis();
     }
-    else if(millis() - wallLostTimestamp > 5000){ // for an extended period of time
+    else if(millis() - wallLostTimestamp > 3000){ // for an extended period of time
       currState = RANDOM_WANDER;
     }
   }
@@ -201,11 +208,20 @@ void init_stepper(){
 }
 
 // -----------------------------------------Layer 3 ------------------------------------------------------------------------
+int randLeftSpeed = base_speed;
+int randRightSpeed = base_speed;
 MotorCommand randomWander(){
   digitalWrite(redLED, HIGH);//turn on red LED
   digitalWrite(ylwLED, HIGH);//turn on yellow LED
   digitalWrite(grnLED, HIGH);//turn on green LED
+
+  if(millis() - randomWanderTimer > randomWanderInterval){
+    randomWanderTimer = millis();
+    randLeftSpeed = random(100, 1000);
+    randRightSpeed = random(100, 1000);
+  }
   
+  return {randLeftSpeed, randRightSpeed, true};
 }
 // -----------------------------------------Layer 2 ------------------------------------------------------------------------
 // example
@@ -220,8 +236,8 @@ MotorCommand moveBehavior(){
       return followCenter();
     // case GO_TO_GOAL:
     //   return goToGoal();
-    // case RANDOM_WANDER:
-    //   return randomWander();
+    case RANDOM_WANDER:
+      return randomWander();
     default:
       return {base_speed, base_speed, true};
   }
@@ -332,6 +348,16 @@ MotorCommand followRightWallPD() {
   cmd.leftSpeed  = base_speed + turn;
   cmd.rightSpeed = base_speed - turn;
 
+  // if we lost the wall, turn left
+  if (leftDist <= 0 || leftDist > 50.0) {
+    // Perform a circle motion: Left wheel slow, Right wheel fast 
+    // to arc back toward where the wall should be.
+    cmd.leftSpeed  = base_speed * 0.4; 
+    cmd.rightSpeed = base_speed * 1.2;
+    return cmd; 
+  }
+
+
   return cmd;
 }
 // PD Control (uses angle to approximate behavior instead of time)
@@ -376,38 +402,49 @@ MotorCommand followLeftWallPD() {
 // if robot detects object too close, closer than deadband, use force vectors to move away
 MotorCommand avoidObstacle(){
   MotorCommand cmd = {0, 0, false};
-  int sensorThreshold = 25; // Start avoiding at 25cm
+  int sensorThreshold = 15;
   int avoidTurnSpeed = 400;
 
-  // Check rear sensors (since we are moving backwards)
   int distCenter = sensorData.backLidar;
+  // if current time - start time > 1000
+  // avoidFlag = false;
   int distL = sensorData.rightLidar;
   int distR = sensorData.leftLidar;
 
-  // If something is detected in our path of travel
-  if ((distCenter > 0 && distCenter < sensorThreshold)
-      || (distL > 0 && distL < 15)
-      || (distR > 0 && distR < 15)
-      || millis() - preventTime < stateDelay) {
-    cmd.active = true;
-    preventTime = millis(); // prevent state changes for a bit
+  // 1. SENSOR CHECK: Is there an obstacle RIGHT NOW?
+  bool obstacleDetected = (distCenter > 0 && distCenter < sensorThreshold);
+
+  // 2. TIMER UPDATE: If we see something, reset the "Safe To Stop" clock
+  if (obstacleDetected) {
+    preventTime = millis();
+  }
+
+  // 3. STATE CHECK: Are we currently avoiding (either seeing it or recently saw it)?
+  if (millis() - preventTime < stateDelay) {
+    // Serial.print("millis: ");
+    // Serial.print(millis());
+    // Serial.print(", preventTime: ");
+    // Serial.print(preventTime);
+    // Serial.print(", stateDelay: ");
+    // Serial.print(stateDelay);
+    // Serial.print(", bool: ");
+    // Serial.println(millis() - preventTime < stateDelay);
     
+    cmd.active = true;
     digitalWrite(enableLED, HIGH);
 
-    // Logic: If obstacle is more to the Left, turn Right (and vice versa)
+    // Steering logic (keep your current logic)
     if (distL < distR) {
-      // Obstacle on left side, steer right
       cmd.leftSpeed = base_speed + avoidTurnSpeed;
       cmd.rightSpeed = base_speed - avoidTurnSpeed;
     } else {
-      // Obstacle on right side, steer left
       cmd.leftSpeed = base_speed - avoidTurnSpeed;
       cmd.rightSpeed = base_speed + avoidTurnSpeed;
     }
-  }
-  if(!cmd.active){
+  } else {
     digitalWrite(enableLED, LOW);
   }
+
   return cmd;
 }
 // -----------------------------------------Layer 0 ------------------------------------------------------------------------
@@ -467,6 +504,17 @@ void setup() {
   Serial.println("M7: Online. Requesting data...");
   //initial sensor
   delay(2000); 
+
+  // Wait until we get a reading that isn't zero from a known sensor
+  Serial.println("Waiting for valid sensor data...");
+  while (!sensorsReady) {
+    updateSensorData();
+    if (sensorData.backLidar > 0 || sensorData.frontLidar > 0) {
+      sensorsReady = true;
+      Serial.println("Sensors Online!");
+    }
+    delay(100); 
+  }
 }
 
 void loop() {
