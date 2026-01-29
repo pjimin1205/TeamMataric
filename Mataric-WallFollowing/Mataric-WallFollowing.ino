@@ -37,6 +37,8 @@ MultiStepper steppers;//create instance to control multiple steppers at the same
 #define max_accel 10000 //maximum motor acceleration
 #define base_speed 500
 
+#define randomWanderInterval 1000
+
 int pauseTime = 2500;   //time before robot moves
 int stepTime = 500;     //delay time between high and low on step pin
 int wait_time = 1000;   //delay for printing data
@@ -97,7 +99,7 @@ struct SensorPacket {
 unsigned long lastSensorRequest = 0;
 const long sensorInterval = 100; // Query sensors every 100 ms
 SensorPacket sensorData;
-bool printSenRead = true; // for debug
+bool printSenRead = false; // for debug
 
 /*
   updateSensorData()
@@ -137,19 +139,23 @@ enum NavState { // state machine, only affects goal/navigation behaviors
 };
 NavState currState = RANDOM_WANDER;  // Change this to switch modes
 int wallLostTimestamp = 0;
-int stateDelay = 500; // 5000 -> 0 ms, delays state for 5000 ms
+int stateDelay = 1250; // 750 -> 0 ms, delays state for 750 ms
 int preventTime = -5000;
 
 int randomWanderTimer = 0;
-# define randomWanderInterval 1000
+
+int avoidDir = 0; // LeftDist - RightDist = 0, () < 0: turn RIGHT, () > 0: turn LEFT, for avoid state
 
 void updateNavState() {   
-    if (sensorData.backLidar < maximumStoppingDist && sensorData.backLidar > 0
+  if (sensorData.backLidar < maximumStoppingDist && sensorData.backLidar > 0
     || millis() - preventTime < stateDelay){
-      // avoidFlag == true;
-      // avoidStartTime = millis();   
-      return;// Stay in current state but let avoidance handle it
-    }
+    // Serial.println("    keep avoiding...");
+    return;// Stay in current state but let avoidance handle it
+  }
+  if(!(millis() - preventTime < stateDelay)){
+    avoidDir = 0; // avoid direction is reset every time it gets out of avoid
+  }
+
   bool leftWallPresent = (sensorData.rightLidar > 0 && sensorData.rightLidar < 30);
   bool rightWallPresent = (sensorData.leftLidar > 0 && sensorData.leftLidar < 30);
  
@@ -169,7 +175,7 @@ void updateNavState() {
     if(wallLostTimestamp == 0){
       wallLostTimestamp = millis();
     }
-    else if(millis() - wallLostTimestamp > 3000){ // for an extended period of time
+    else if(millis() - wallLostTimestamp > 5000){ // for an extended period of time
       currState = RANDOM_WANDER;
     }
   }
@@ -217,8 +223,8 @@ MotorCommand randomWander(){
 
   if(millis() - randomWanderTimer > randomWanderInterval){
     randomWanderTimer = millis();
-    randLeftSpeed = random(100, 1000);
-    randRightSpeed = random(100, 1000);
+    randLeftSpeed = random(100, 600);
+    randRightSpeed = random(100, 600);
   }
   
   return {randLeftSpeed, randRightSpeed, true};
@@ -328,32 +334,32 @@ MotorCommand followRightWallPD() {
   digitalWrite(ylwLED, HIGH);//turn on yellow LED
   digitalWrite(grnLED, LOW);//turn on green LED
 
-  const float desiredDist = 12.0; // cm
+  const float desiredDist = 14.0; // cm // different distance than left because it's being wierd
   const float Kp = 10.0;          // distance gain: 10-15
   const float Kd = 80.0;          // angle gain (radians!): 50-100
 
-  float leftDist = sensorData.leftLidar;
-  float backLeft = sensorData.backLeftSonar;
+  float sideDist = sensorData.leftLidar;
+  float backSonar = sensorData.backLeftSonar;
 
-  float distError = desiredDist - leftDist;
+  float distError = desiredDist - sideDist;
 
   // Angle error (already computed in your bang code)
-  float height = leftDist - backLeft; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
+  float height = sideDist - backSonar; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
   float base = 8.0; // cm between sensors
   float angleError = atan2(height, base); // radians
 
   float turn = (Kp * distError) + (Kd * angleError);
-  turn = constrain(turn, -125, 125);
+  turn = constrain(turn, -150, 150); // more aggressive than left bc it's being weird
 
   cmd.leftSpeed  = base_speed + turn;
   cmd.rightSpeed = base_speed - turn;
 
   // if we lost the wall, turn left
-  if (leftDist <= 0 || leftDist > 50.0) {
+  if (sideDist <= 0 || sideDist > 50.0) {
     // Perform a circle motion: Left wheel slow, Right wheel fast 
     // to arc back toward where the wall should be.
-    cmd.leftSpeed  = base_speed * 0.4; 
-    cmd.rightSpeed = base_speed * 1.2;
+    cmd.leftSpeed  = base_speed * 0.2; 
+    cmd.rightSpeed = base_speed * 2.0;
     return cmd; 
   }
 
@@ -372,13 +378,13 @@ MotorCommand followLeftWallPD() {
   const float Kp = 10.0;          // distance gain: 10-15
   const float Kd = 80.0;          // angle gain (radians!): 50-100
 
-  float leftDist = sensorData.rightLidar;
-  float backLeft = sensorData.backRightSonar;
+  float sideDist = sensorData.rightLidar;
+  float backSonar = sensorData.backRightSonar;
 
-  float distError = desiredDist - leftDist;
+  float distError = desiredDist - sideDist;
 
   // Angle error (already computed in your bang code)
-  float height = leftDist - backLeft; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
+  float height = sideDist - backSonar; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
   float base = 8.0; // cm between sensors
   float angleError = atan2(height, base); // radians
 
@@ -389,7 +395,7 @@ MotorCommand followLeftWallPD() {
   cmd.rightSpeed = base_speed + turn;
 
   // if we lost the wall, turn left
-  if (leftDist <= 0 || leftDist > 50.0) {
+  if (sideDist <= 0 || sideDist > 50.0) {
     // Perform a circle motion: Left wheel slow, Right wheel fast 
     // to arc back toward where the wall should be.
     cmd.leftSpeed  = base_speed * 1.2; 
@@ -402,7 +408,7 @@ MotorCommand followLeftWallPD() {
 // if robot detects object too close, closer than deadband, use force vectors to move away
 MotorCommand avoidObstacle(){
   MotorCommand cmd = {0, 0, false};
-  int sensorThreshold = 15;
+  int sensorThreshold = 20;
   int avoidTurnSpeed = 400;
 
   int distCenter = sensorData.backLidar;
@@ -417,6 +423,7 @@ MotorCommand avoidObstacle(){
   // 2. TIMER UPDATE: If we see something, reset the "Safe To Stop" clock
   if (obstacleDetected) {
     preventTime = millis();
+    avoidDir = distL - distR;
   }
 
   // 3. STATE CHECK: Are we currently avoiding (either seeing it or recently saw it)?
@@ -432,24 +439,79 @@ MotorCommand avoidObstacle(){
     
     cmd.active = true;
     digitalWrite(enableLED, HIGH);
-
+    
     // Steering logic (keep your current logic)
-    if (distL < distR) {
+    if (distL < distR || avoidDir < 0) {
+      Serial.println("AVOID: turn RIGHT!");
       cmd.leftSpeed = base_speed + avoidTurnSpeed;
       cmd.rightSpeed = base_speed - avoidTurnSpeed;
-    } else {
+    } else if(distL > distR || avoidDir > 0) {
+      Serial.println("AVOID: turn LEFT!");
       cmd.leftSpeed = base_speed - avoidTurnSpeed;
       cmd.rightSpeed = base_speed + avoidTurnSpeed;
-    }
+    }else{
+      Serial.print("AVOID: equal length");
+      Serial.print("avoid dir: ");
+      Serial.println(avoidDir);
+    } // stay the course if in the middle of turning but sides read equal
   } else {
     digitalWrite(enableLED, LOW);
   }
 
   return cmd;
 }
+
+MotorCommand dumbAvoidObstacle(){
+  int sensorThreshold = 20;
+  int avoidTurnSpeed = 400;
+  MotorCommand cmd = {0, 0, false};
+
+  int distL = sensorData.rightLidar;
+  int distR = sensorData.leftLidar;
+  int distCenter = sensorData.backLidar;
+
+  bool obstacleDetected = (distCenter > 0 && distCenter < sensorThreshold);
+  
+  if(obstacleDetected && (millis() - preventTime >= stateDelay)){ // new detection, timer not started
+    preventTime = millis();
+    // Choose direction once and lock it in
+    if (distL - distR == 0) {
+      avoidDir = 1; // Default to Left if perfectly centered
+    } else {
+      avoidDir = distL - distR; 
+    }
+  }
+  // this is called when an object is too close
+  if (millis() - preventTime < stateDelay) {
+    cmd.active = true;
+    digitalWrite(enableLED, HIGH);
+    if(avoidDir < 0){
+      Serial.println("turning RIGHT - avoid dir: " + String(avoidDir));
+      cmd.leftSpeed = base_speed + avoidTurnSpeed;
+      cmd.rightSpeed = base_speed - avoidTurnSpeed;
+    }
+    else if(avoidDir > 0){
+      Serial.println("turning LEFT - avoid dir: " + String(avoidDir));
+      cmd.leftSpeed = base_speed - avoidTurnSpeed;
+      cmd.rightSpeed = base_speed + avoidTurnSpeed;
+    }
+    else{
+      Serial.println("no direction");
+    }
+  }
+  else{
+    digitalWrite(enableLED, LOW);
+  }
+
+  return cmd;
+}
+
 // -----------------------------------------Layer 0 ------------------------------------------------------------------------
 // robot detects object too close, stops the robot
 MotorCommand collide(){
+  digitalWrite(redLED, LOW);//turn on red LED
+  digitalWrite(ylwLED, LOW);//turn on yellow LED
+  digitalWrite(grnLED, LOW);//turn on green LED
   MotorCommand cmd = {0, 0, false};
   int wallDetectDist = 10;
   float speedMod = 2;
@@ -461,6 +523,7 @@ MotorCommand collide(){
     cmd.leftSpeed = 0;
     cmd.rightSpeed = 0;
     cmd.active = true;
+    // Serial.println("COLLIDE!");
     // collisionRecoveryTimer = millis(); // Start/Reset retreat timer
   }
 
@@ -533,7 +596,8 @@ void loop() {
   }
 
   // --- LAYER 1: OBSTACLE AVOIDANCE ---
-  c = avoidObstacle();
+  // c = avoidObstacle();
+  c = dumbAvoidObstacle();
   if(c.active){
     cmd = c;
     goto APPLY;
