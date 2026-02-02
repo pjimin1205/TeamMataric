@@ -9,7 +9,7 @@
 #define WHEEL_DIAM_CM 8.4 // wheel diameter in centimeters
 #define STEPS_PER_ROT 800 //number of steps per wheel rotation
 #define CM_PER_ROTATION 26.39 //circumference of wheel in centimeters
-#define CM_TO_STEPS_CONV STEPS_PER_ROT/CM_PER_ROTATION //conversion factor from centimeters to steps
+#define CM_TO_STEPS_CONV (STEPS_PER_ROT/(float)CM_PER_ROTATION) //conversion factor from centimeters to steps
 #define ENCODER_TICKS_PER_ROTATION 20 //number of encoder ticks per wheel rotation
 #define CM_PER_FOOT 30.48 // number of centimeters in a foot
 // ------------------------------------- LED's -------------------------------------------------------------------------
@@ -27,6 +27,25 @@ int leds[3] = {5,6,7};      //array of LED pin numbers
 #define ltStepPin 52 //left stepper motor step pin 
 #define ltDirPin 53  //left stepper motor direction pin
 
+// --------------------------------- goToGoal Initial Vars -------------------------------------------------------------------
+// Odometry Variables
+float robotX = 0.0;     // cm
+float robotY = 0.0;     // cm
+float robotTheta = 0.0; // Radians (0 is facing 'East' or forward)
+
+long lastLeftSteps = 0;
+long lastRightSteps = 0;
+
+// Goal Variables
+float goalX = 30*9;    // Target 9 feet ahead
+float goalY = -30*3;    // Target 3 foot to the left
+unsigned long lastOdoPrint = 0;
+
+// Goal Flag
+bool goalSet = true;
+bool goalReached = false;
+
+
 AccelStepper stepperRight(AccelStepper::DRIVER, rtStepPin, rtDirPin);//create instance of right stepper motor object (2 driver pins, low to high transition step pin 52, direction input pin 53 (high means forward)
 AccelStepper stepperLeft(AccelStepper::DRIVER, ltStepPin, ltDirPin);//create instance of left stepper motor object (2 driver pins, step pin 50, direction input pin 51)
 MultiStepper steppers;//create instance to control multiple steppers at the same time
@@ -36,8 +55,6 @@ MultiStepper steppers;//create instance to control multiple steppers at the same
 #define max_speed 1500 //maximum stepper motor speed
 #define max_accel 10000 //maximum motor acceleration
 #define base_speed 500
-
-#define randomWanderInterval 1000
 
 int pauseTime = 2500;   //time before robot moves
 int stepTime = 500;     //delay time between high and low on step pin
@@ -129,6 +146,48 @@ void updateSensorData(){
     }
   }
 }
+
+void updateOdometry() {
+    // Get current absolute positions from the AccelStepper objects
+    long currLeft = stepperLeft.currentPosition();
+    long currRight = stepperRight.currentPosition();
+
+    // 1. Calculate change in steps
+    long dLeftSteps = currLeft - lastLeftSteps;
+    long dRightSteps = currRight - lastRightSteps;
+
+    // 2. Convert steps to distance (cm)
+    // Note: Use (float) to ensure decimal precision
+    float dLeftCM = -(dLeftSteps / (float)CM_TO_STEPS_CONV);
+    float dRightCM = -(dRightSteps / (float)CM_TO_STEPS_CONV);
+
+    // 3. Differential Drive Kinematics
+    float dCenter = (dLeftCM + dRightCM) / 2.0;
+    float dPhi = (dRightCM - dLeftCM) / WIDTH_OF_BOT_CM; // Change in heading
+
+    // 4. Update Global Pose
+    robotX += dCenter * cos(robotTheta + (dPhi / 2.0));
+    robotY += dCenter * sin(robotTheta + (dPhi / 2.0));
+    robotTheta += dPhi;
+
+    // Keep theta between -PI and PI
+    if (robotTheta > PI) robotTheta -= TWO_PI;
+    if (robotTheta < -PI) robotTheta += TWO_PI;
+
+    // Save state for next loop
+    lastLeftSteps = currLeft;
+    lastRightSteps = currRight;
+
+    if (millis() - lastOdoPrint > 500) { // Print every 500ms
+        lastOdoPrint = millis();
+        Serial.print("Pose: X=");
+        Serial.print(robotX);
+        Serial.print(" Y=");
+        Serial.print(robotY);
+        Serial.print(" Theta=");
+        Serial.println(robotTheta * 180 / PI); // Convert to degrees for readability
+    }
+}
 enum NavState { // state machine, only affects goal/navigation behaviors
   LEFT_WALL,
   RIGHT_WALL,
@@ -139,23 +198,20 @@ enum NavState { // state machine, only affects goal/navigation behaviors
 };
 NavState currState = RANDOM_WANDER;  // Change this to switch modes
 int wallLostTimestamp = 0;
-int stateDelay = 1250; // 750 -> 0 ms, delays state for 750 ms
+int stateDelay = 500; // 5000 -> 0 ms, delays state for 5000 ms
 int preventTime = -5000;
 
 int randomWanderTimer = 0;
-
-int avoidDir = 0; // LeftDist - RightDist = 0, () < 0: turn RIGHT, () > 0: turn LEFT, for avoid state
+# define randomWanderInterval 1000
 
 void updateNavState() {   
-  if (sensorData.backLidar < maximumStoppingDist && sensorData.backLidar > 0
+    if (sensorData.backLidar < maximumStoppingDist && sensorData.backLidar > 0
     || millis() - preventTime < stateDelay){
-    // Serial.println("    keep avoiding...");
-    return;// Stay in current state but let avoidance handle it
-  }
-  if(!(millis() - preventTime < stateDelay)){
-    avoidDir = 0; // avoid direction is reset every time it gets out of avoid
-  }
-
+      // avoidFlag == true;
+      // avoidStartTime = millis();   
+      return;// Stay in current state but let avoidance handle it
+    }
+  //Serial.println(currState);
   bool leftWallPresent = (sensorData.rightLidar > 0 && sensorData.rightLidar < 30);
   bool rightWallPresent = (sensorData.leftLidar > 0 && sensorData.leftLidar < 30);
  
@@ -175,8 +231,11 @@ void updateNavState() {
     if(wallLostTimestamp == 0){
       wallLostTimestamp = millis();
     }
-    else if(millis() - wallLostTimestamp > 5000){ // for an extended period of time
+    else if(millis() - wallLostTimestamp > 3000 && !goalSet){ // for an extended period of time and if there is no goal set
+      // if no walls for 3 seconds, go to random wander
       currState = RANDOM_WANDER;
+    } else if(goalSet){ // if there is a goal set, go to goal
+      currState = GO_TO_GOAL;
     }
   }
   // */
@@ -223,11 +282,54 @@ MotorCommand randomWander(){
 
   if(millis() - randomWanderTimer > randomWanderInterval){
     randomWanderTimer = millis();
-    randLeftSpeed = random(100, 600);
-    randRightSpeed = random(100, 600);
+    randLeftSpeed = random(100, 1000);
+    randRightSpeed = random(100, 1000);
   }
   
   return {randLeftSpeed, randRightSpeed, true};
+}
+
+MotorCommand goToGoal(float targetX, float targetY) {
+    MotorCommand cmd = {0, 0, true};
+
+    digitalWrite(redLED, HIGH);//turn on red LED
+    digitalWrite(ylwLED, HIGH);//turn on yellow LED
+    digitalWrite(grnLED, HIGH);//turn on green LED
+
+
+    // 1. Calculate vector to goal
+    float dx = targetX - robotX;
+    float dy = targetY - robotY;
+    float distanceToGoal = sqrt(dx * dx + dy * dy);
+    float angleToGoal = atan2(dy, dx);
+
+    // 2. Calculate heading error
+    float alpha = angleToGoal - robotTheta;
+    // Normalize alpha to (-PI, PI)
+    while (alpha > PI) alpha -= TWO_PI;
+    while (alpha < -PI) alpha += TWO_PI;
+    Serial.println(distanceToGoal);
+    // 3. Stop condition
+    if (distanceToGoal < 1) { // Within 5cm
+        Serial.println("Goal Reached");
+        return {0, 0, false}; 
+    }
+
+    // 4. Control Gains (Tweak these!)
+    float K_linear = 10;  // Speed towards goal
+    float K_angular = 400; // Speed of turning
+
+    float v = K_linear * distanceToGoal;
+    float w = K_angular * alpha;
+
+    // Limit maximums to your base_speed
+    v = constrain(v, -base_speed, base_speed);
+    
+    cmd.leftSpeed = v - w;
+    cmd.rightSpeed = v + w;
+    cmd.active = true;
+
+    return cmd;
 }
 // -----------------------------------------Layer 2 ------------------------------------------------------------------------
 // example
@@ -240,12 +342,12 @@ MotorCommand moveBehavior(){
       return followRightWallPD();
     case CENTER:
       return followCenter();
-    // case GO_TO_GOAL:
-    //   return goToGoal();
+    case GO_TO_GOAL:
+      return goToGoal(goalX, goalY);
     case RANDOM_WANDER:
       return randomWander();
     default:
-      return {base_speed, base_speed, true};
+      return {0, 0, false};
   }
 }
 MotorCommand followCenter(){
@@ -334,32 +436,32 @@ MotorCommand followRightWallPD() {
   digitalWrite(ylwLED, HIGH);//turn on yellow LED
   digitalWrite(grnLED, LOW);//turn on green LED
 
-  const float desiredDist = 14.0; // cm // different distance than left because it's being wierd
+  const float desiredDist = 12.0; // cm
   const float Kp = 10.0;          // distance gain: 10-15
   const float Kd = 80.0;          // angle gain (radians!): 50-100
 
-  float sideDist = sensorData.leftLidar;
-  float backSonar = sensorData.backLeftSonar;
+  float leftDist = sensorData.leftLidar;
+  float backLeft = sensorData.backLeftSonar;
 
-  float distError = desiredDist - sideDist;
+  float distError = desiredDist - leftDist;
 
   // Angle error (already computed in your bang code)
-  float height = sideDist - backSonar; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
+  float height = leftDist - backLeft; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
   float base = 8.0; // cm between sensors
   float angleError = atan2(height, base); // radians
 
   float turn = (Kp * distError) + (Kd * angleError);
-  turn = constrain(turn, -150, 150); // more aggressive than left bc it's being weird
+  turn = constrain(turn, -125, 125);
 
   cmd.leftSpeed  = base_speed + turn;
   cmd.rightSpeed = base_speed - turn;
 
   // if we lost the wall, turn left
-  if (sideDist <= 0 || sideDist > 50.0) {
+  if (leftDist <= 0 || leftDist > 50.0) {
     // Perform a circle motion: Left wheel slow, Right wheel fast 
     // to arc back toward where the wall should be.
-    cmd.leftSpeed  = base_speed * 0.2; 
-    cmd.rightSpeed = base_speed * 2.0;
+    cmd.leftSpeed  = base_speed * 0.4; 
+    cmd.rightSpeed = base_speed * 1.2;
     return cmd; 
   }
 
@@ -378,13 +480,13 @@ MotorCommand followLeftWallPD() {
   const float Kp = 10.0;          // distance gain: 10-15
   const float Kd = 80.0;          // angle gain (radians!): 50-100
 
-  float sideDist = sensorData.rightLidar;
-  float backSonar = sensorData.backRightSonar;
+  float leftDist = sensorData.rightLidar;
+  float backLeft = sensorData.backRightSonar;
 
-  float distError = desiredDist - sideDist;
+  float distError = desiredDist - leftDist;
 
   // Angle error (already computed in your bang code)
-  float height = sideDist - backSonar; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
+  float height = leftDist - backLeft; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
   float base = 8.0; // cm between sensors
   float angleError = atan2(height, base); // radians
 
@@ -395,7 +497,7 @@ MotorCommand followLeftWallPD() {
   cmd.rightSpeed = base_speed + turn;
 
   // if we lost the wall, turn left
-  if (sideDist <= 0 || sideDist > 50.0) {
+  if (leftDist <= 0 || leftDist > 50.0) {
     // Perform a circle motion: Left wheel slow, Right wheel fast 
     // to arc back toward where the wall should be.
     cmd.leftSpeed  = base_speed * 1.2; 
@@ -408,7 +510,7 @@ MotorCommand followLeftWallPD() {
 // if robot detects object too close, closer than deadband, use force vectors to move away
 MotorCommand avoidObstacle(){
   MotorCommand cmd = {0, 0, false};
-  int sensorThreshold = 20;
+  int sensorThreshold = 15;
   int avoidTurnSpeed = 400;
 
   int distCenter = sensorData.backLidar;
@@ -423,7 +525,6 @@ MotorCommand avoidObstacle(){
   // 2. TIMER UPDATE: If we see something, reset the "Safe To Stop" clock
   if (obstacleDetected) {
     preventTime = millis();
-    avoidDir = distL - distR;
   }
 
   // 3. STATE CHECK: Are we currently avoiding (either seeing it or recently saw it)?
@@ -439,79 +540,24 @@ MotorCommand avoidObstacle(){
     
     cmd.active = true;
     digitalWrite(enableLED, HIGH);
-    
+
     // Steering logic (keep your current logic)
-    if (distL < distR || avoidDir < 0) {
-      Serial.println("AVOID: turn RIGHT!");
+    if (distL < distR) {
       cmd.leftSpeed = base_speed + avoidTurnSpeed;
       cmd.rightSpeed = base_speed - avoidTurnSpeed;
-    } else if(distL > distR || avoidDir > 0) {
-      Serial.println("AVOID: turn LEFT!");
+    } else {
       cmd.leftSpeed = base_speed - avoidTurnSpeed;
       cmd.rightSpeed = base_speed + avoidTurnSpeed;
-    }else{
-      Serial.print("AVOID: equal length");
-      Serial.print("avoid dir: ");
-      Serial.println(avoidDir);
-    } // stay the course if in the middle of turning but sides read equal
+    }
   } else {
     digitalWrite(enableLED, LOW);
   }
 
   return cmd;
 }
-
-MotorCommand dumbAvoidObstacle(){
-  int sensorThreshold = 20;
-  int avoidTurnSpeed = 400;
-  MotorCommand cmd = {0, 0, false};
-
-  int distL = sensorData.rightLidar;
-  int distR = sensorData.leftLidar;
-  int distCenter = sensorData.backLidar;
-
-  bool obstacleDetected = (distCenter > 0 && distCenter < sensorThreshold);
-  
-  if(obstacleDetected && (millis() - preventTime >= stateDelay)){ // new detection, timer not started
-    preventTime = millis();
-    // Choose direction once and lock it in
-    if (distL - distR == 0) {
-      avoidDir = 1; // Default to Left if perfectly centered
-    } else {
-      avoidDir = distL - distR; 
-    }
-  }
-  // this is called when an object is too close
-  if (millis() - preventTime < stateDelay) {
-    cmd.active = true;
-    digitalWrite(enableLED, HIGH);
-    if(avoidDir < 0){
-      Serial.println("turning RIGHT - avoid dir: " + String(avoidDir));
-      cmd.leftSpeed = base_speed + avoidTurnSpeed;
-      cmd.rightSpeed = base_speed - avoidTurnSpeed;
-    }
-    else if(avoidDir > 0){
-      Serial.println("turning LEFT - avoid dir: " + String(avoidDir));
-      cmd.leftSpeed = base_speed - avoidTurnSpeed;
-      cmd.rightSpeed = base_speed + avoidTurnSpeed;
-    }
-    else{
-      Serial.println("no direction");
-    }
-  }
-  else{
-    digitalWrite(enableLED, LOW);
-  }
-
-  return cmd;
-}
-
 // -----------------------------------------Layer 0 ------------------------------------------------------------------------
 // robot detects object too close, stops the robot
 MotorCommand collide(){
-  digitalWrite(redLED, LOW);//turn on red LED
-  digitalWrite(ylwLED, LOW);//turn on yellow LED
-  digitalWrite(grnLED, LOW);//turn on green LED
   MotorCommand cmd = {0, 0, false};
   int wallDetectDist = 10;
   float speedMod = 2;
@@ -523,7 +569,6 @@ MotorCommand collide(){
     cmd.leftSpeed = 0;
     cmd.rightSpeed = 0;
     cmd.active = true;
-    // Serial.println("COLLIDE!");
     // collisionRecoveryTimer = millis(); // Start/Reset retreat timer
   }
 
@@ -583,29 +628,40 @@ void setup() {
 void loop() {
   updateSensorData();
   updateNavState();
-  
-  // Start with a default forward (backward-moving) command
-  MotorCommand cmd = {base_speed, base_speed, true}; 
-  MotorCommand c;
+  updateOdometry();
 
+  MotorCommand cmd = {0, 0, false};
+  MotorCommand c;
+  
+  // 1. DEFAULT: If no goal, default to forward wander. If goal, default to stop.
+  if(!goalSet) {
+    cmd = {base_speed, base_speed, true}; 
+  } else {
+    cmd = {0, 0, false};
+  }
+  
   // --- LAYER 0: COLLISION (Highest Priority) ---
   c = collide();
-  if(c.active){
-    cmd = c;
-    goto APPLY; 
-  }
+  if(c.active){ cmd = c; goto APPLY; }
 
   // --- LAYER 1: OBSTACLE AVOIDANCE ---
-  // c = avoidObstacle();
-  c = dumbAvoidObstacle();
-  if(c.active){
-    cmd = c;
-    goto APPLY;
+  c = avoidObstacle();
+  if(c.active){ cmd = c; goto APPLY; }
+
+  // --- LAYER 2: GO TO GOAL ---
+  // If a goal is set, try to do this FIRST.
+  if(goalSet) {
+    c = goToGoal(goalX, goalY);
+    if(c.active) {
+      cmd = c;
+      goto APPLY; // "Break away" from walls to head to goal!
+    }
   }
 
-  // --- LAYER 2: NAVIGATION (Wall Following / Center) ---
+  // --- LAYER 3: NAVIGATION (Wall Following / Center) ---
+  // If no goal is set, or if goToGoal is inactive, follow walls.
   c = moveBehavior();
-  if(c.active){
+  if(c.active) {
     cmd = c;
     goto APPLY;
   }
