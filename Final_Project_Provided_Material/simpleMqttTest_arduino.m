@@ -1,18 +1,12 @@
-clc;
-clear all;
-close all;
+clc; clear all; close all;
 
-% mqttBroker_school = "tcp://mosquitto.csse.rose-hulman.edu:1883";
-mqttBroker_public = "tcp://broker.hivemq.com:1883";
-
-mqClient = mqttclient(mqttBroker_public);
-
+mqClient = mqttclient("tcp://broker.hivemq.com");
 subscribe(mqClient, "ece445/parkj10/to_arduino","Callback",@showSentMessage)
 subscribe(mqClient, "ece445/parkj10/to_matlab","Callback",@showReceivedMessage)
 
 for k = 1:3
     message = sprintf('Hello from matlab %d',k);
-    write(mqClient, "ece445/parkj10/to_arduino", message)
+    write(mqClient, "ece445/your_username/to_arduino", message)
     pause(2)
 end
 
