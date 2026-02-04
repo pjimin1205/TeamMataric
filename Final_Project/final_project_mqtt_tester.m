@@ -37,8 +37,8 @@ while true
 end
 
 % Cleanup
-unsubscribe(mqClient, "ece445/parkj10/to_arduino");
-unsubscribe(mqClient, "ece445/parkj10/to_matlab");
+unsubscribe(mqClient, 'Topic', 'ece445/parkj10/to_arduino');
+unsubscribe(mqClient, 'Topic', 'ece445/parkj10/to_matlab');
 clear mqClient;
 fprintf('Disconnected.\n');
 

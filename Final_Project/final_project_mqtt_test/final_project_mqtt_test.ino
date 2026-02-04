@@ -27,8 +27,9 @@ const char broker[] = "broker.hivemq.com";
 int port = 1883;
 const char topicSubscribe[]  = "ece445/parkj10/to_arduino";
 const char topicPublish[]  = "ece445/parkj10/to_matlab";
+const char sensorsTopicPublish[]  = "ece445/parkj10/sensors_to_matlab";
 unsigned long previousMillis = 0;
-const long interval = 10000;
+const long sensorPublishInterval = 1000; // ms interval between sensor data publishes
 
 void setupMQTTConnection(){
   // attempt to connect to Wifi network:
@@ -66,8 +67,10 @@ void setupMQTTConnection(){
   mqttClient.subscribe(topicSubscribe);
   Serial.print("Topic: ");
   Serial.println(topicSubscribe);
-
   Serial.println();
+
+  // Serial.print("Subscription status: ");
+  // Serial.println(mqttClient.subscribed(topicSubscribe) ? "SUCCESS" : "FAILED");
 }
 
 void onMqttMessage(int messageSize) {
@@ -101,6 +104,7 @@ void onMqttMessage(int messageSize) {
     digitalWrite(7, LOW);
     sendMessage("YELLOW LED turned OFF");
   }
+  Serial.println("recieved message: "+String(message));
 }
 
 void sendMessage(String message){
@@ -114,6 +118,62 @@ void sendMessage(String message){
     mqttClient.print(message);
     mqttClient.endMessage();
 }
+// ------------------------------------- SENSOR DATA -------------------------------------------------------------------------
+struct SensorPacket {
+    int frontLidar;
+    int backLidar;
+    int leftLidar;
+    int rightLidar;
+    int frontLeftSonar;
+    int frontRightSonar;
+    int backLeftSonar;
+    int backRightSonar;
+    // This line tells the RPC library how to pack the data
+    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar);
+};
+
+unsigned long lastSensorRequest = 0;
+const long sensorPollInterval = 100; // Query sensors every 100 ms
+SensorPacket sensorData;
+bool printSenRead = false; // for debug
+
+void updateSensorData(){
+  // Only talk to the M4 every 100ms
+  if (millis() - lastSensorRequest >= sensorPollInterval) {
+    lastSensorRequest = millis();
+    auto res = RPC.call("getSensorData");
+    sensorData = res.as<SensorPacket>();
+
+    if(printSenRead){
+      Serial.print("F: "); Serial.print(sensorData.frontLidar);
+      Serial.print(" | B: "); Serial.print(sensorData.backLidar);
+      Serial.print(" | L: "); Serial.print(sensorData.leftLidar);
+      Serial.print(" | R: "); Serial.print(sensorData.rightLidar);
+      Serial.print(" | LSonar: "); Serial.print(sensorData.frontLeftSonar);
+      Serial.print(" | RSonar: "); Serial.print(sensorData.frontRightSonar);
+      Serial.print(" | BLSonar: "); Serial.print(sensorData.backLeftSonar);
+      Serial.print(" | BRSonar: "); Serial.print(sensorData.backRightSonar);
+      Serial.println();
+    }
+  }
+}
+
+
+void publishSensorData() {
+    // Create a formatted string with all sensor values
+    String sensorMsg = String(sensorData.frontLidar) + "," +
+                       String(sensorData.backLidar) + "," +
+                       String(sensorData.leftLidar) + "," +
+                       String(sensorData.rightLidar) + "," +
+                       String(sensorData.frontLeftSonar) + "," +
+                       String(sensorData.frontRightSonar) + "," +
+                       String(sensorData.backLeftSonar) + "," +
+                       String(sensorData.backRightSonar);
+    
+    mqttClient.beginMessage(sensorsTopicPublish);
+    mqttClient.print(sensorMsg);
+    mqttClient.endMessage();
+}
 
 // --------------------------------------------------------- MAIN -------------------------------------------------------------
 void setup() {
@@ -124,7 +184,16 @@ void setup() {
 
   setupMQTTConnection();
 }
-
+unsigned long lastSensorPublish = -5000;
 void loop() {
   mqttClient.poll();
+  // updateSensorData();
+  // Then do time-based publishing
+  // unsigned long currentMillis = millis();
+  
+  // if (currentMillis - lastSensorPublish >= sensorPublishInterval) {
+  //   lastSensorPublish = currentMillis;
+  //   publishSensorData();
+  //   Serial.println("published sensor data");
+  // }
 }
