@@ -29,7 +29,7 @@ const char topicSubscribe[]  = "ece445/parkj10/to_arduino";
 const char topicPublish[]  = "ece445/parkj10/to_matlab";
 const char sensorsTopicPublish[]  = "ece445/parkj10/sensors_to_matlab";
 unsigned long previousMillis = 0;
-const long sensorPublishInterval = 1000; // ms interval between sensor data publishes
+const long sensorPublishInterval = 200; // ms interval between sensor data publishes
 
 void setupMQTTConnection(){
   // attempt to connect to Wifi network:
@@ -177,7 +177,13 @@ void publishSensorData() {
 
 // --------------------------------------------------------- MAIN -------------------------------------------------------------
 void setup() {
-  Serial.begin(9600);
+  // Serial.begin(9600);
+  Serial.begin(115200);
+  Serial.println("initializing RPC");
+  RPC.begin();
+  delay(2000); 
+  Serial.println("RPC initialized");
+
   pinMode(redLED, OUTPUT);//set red LED as output
   pinMode(grnLED, OUTPUT);//set green LED as output
   pinMode(ylwLED, OUTPUT);//set yellow LED as output
@@ -187,13 +193,13 @@ void setup() {
 unsigned long lastSensorPublish = -5000;
 void loop() {
   mqttClient.poll();
-  // updateSensorData();
+  updateSensorData();
   // Then do time-based publishing
-  // unsigned long currentMillis = millis();
+  unsigned long currentMillis = millis();
   
-  // if (currentMillis - lastSensorPublish >= sensorPublishInterval) {
-  //   lastSensorPublish = currentMillis;
-  //   publishSensorData();
-  //   Serial.println("published sensor data");
-  // }
+  if (currentMillis - lastSensorPublish >= sensorPublishInterval) {
+    lastSensorPublish = currentMillis;
+    publishSensorData();
+    Serial.println("published sensor data");
+  }
 }
