@@ -79,7 +79,7 @@ struct SensorPacket {
     int backRightSonar;
     int photoLeft;;
     int photoRight;
-    int encoderLeft;;
+    int encoderLeft;
     int encoderRight;
     // This macro tells the RPC/MsgPack layer how to serialize fields
     MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar, photoLeft, photoRight, encoderLeft, encoderRight);
@@ -189,6 +189,9 @@ void setup() {
   pinMode(backRightSnrTrigPin, OUTPUT);
   pinMode(backRightSnrEchoPin, INPUT);
 
+  // Configure photoresistor pins as INPUT (default)
+  pinMode(photoLeftPin, INPUT);
+  pinMode(photoRightPin, INPUT);
   // Attach encoder interrupts
   attachInterrupt(digitalPinToInterrupt(ltEncoder), LwheelSpeed, CHANGE);    //init the interrupt mode for the left encoder
   attachInterrupt(digitalPinToInterrupt(rtEncoder), RwheelSpeed, CHANGE);   //init the interrupt mode for the right encoder
