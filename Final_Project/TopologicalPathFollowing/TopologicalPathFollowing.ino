@@ -188,6 +188,13 @@ void updateOdometry() {
         Serial.println(robotTheta * 180 / PI); // Convert to degrees for readability
     }
 }
+
+float wrapAngle(float a) {
+  while (a > PI) a -= TWO_PI;
+  while (a < -PI) a += TWO_PI;
+  return a;
+}
+
 enum NavState { // state machine, only affects goal/navigation behaviors
   LEFT_WALL,
   RIGHT_WALL,
@@ -196,6 +203,7 @@ enum NavState { // state machine, only affects goal/navigation behaviors
   RANDOM_WANDER,
   GO_TO_GOAL
 };
+
 NavState currState = RANDOM_WANDER;  // Change this to switch modes
 int wallLostTimestamp = 0;
 int stateDelay = 500; // 5000 -> 0 ms, delays state for 5000 ms
@@ -204,7 +212,10 @@ int preventTime = -5000;
 int randomWanderTimer = 0;
 # define randomWanderInterval 1000
 
-void updateNavState() {   
+/*
+  Sets the current state between CENTER, LEFT_WALL, RIGHT_WALL, RANDOM_WANDER and GO_TO_GOAL
+*/
+void updateNavState_wall_follow() {   
     if (sensorData.backLidar < maximumStoppingDist && sensorData.backLidar > 0
     || millis() - preventTime < stateDelay){
       // avoidFlag == true;
@@ -238,8 +249,66 @@ void updateNavState() {
       currState = GO_TO_GOAL;
     }
   }
-  // */
 }
+
+char path[] = "SFFRFFFRFT";
+int pathIndex = 0; // update path index once a move has been completed
+
+bool pathActionActive = false;
+
+// Odometry targets
+float targetTheta = 0;
+float targetDistance = 0;
+
+// Starting pose for actions
+float actionStartX = 0;
+float actionStartY = 0;
+float actionStartTheta = 0;
+
+// Tunables - may be able to delete later
+const float TURN_TOL = 3.0 * DEG_TO_RAD;   // ~3 deg
+const float DIST_TOL = 2.0;                // cm
+const float CELL_FORWARD_DIST = 45.0;      // hallway length (~18 in)
+
+enum NavPathState { LEFT, RIGHT, FORWARD, START, TERMINATE};
+NavPathState currPathState = START;
+
+/*
+  Sets the current path state between turn LEFT, RIGHT, FORWARD, START, TERMINATE
+  Shouldn't need to account for blocked state because path accounts for that already.
+*/
+void updateNavState_path() {
+  if (pathActionActive) return; // wait until current action finishes
+
+  char cmd = path[pathIndex];
+
+  switch (cmd) {
+    case 'S':
+      currPathState = START;
+      break;
+
+    case 'F':
+      currPathState = FORWARD;
+      break;
+
+    case 'L':
+      currPathState = LEFT;
+      break;
+
+    case 'R':
+      currPathState = RIGHT;
+      break;
+
+    case 'T':
+      currPathState = TERMINATE;
+      break;
+
+    default:
+      currPathState = TERMINATE;
+      break;
+  }
+}
+
 
 // ------------------------------------- START OF FUNCTIONS ------------------------------------------------------------------
 void init_stepper(){
@@ -381,54 +450,6 @@ MotorCommand followCenter(){
   return cmd;
 }
 // -----------------------------------------Layer 1 ------------------------------------------------------------------------
-// follow right wall
-MotorCommand followRightWallBang(){
-  MotorCommand cmd = {base_speed, base_speed, true};
-
-  int backLeftSonarDist = sensorData.backLeftSonar; // CM
-  int leftLidarDist = sensorData.leftLidar; // CM
-  int frontLeftSonarDist = sensorData.frontLeftSonar*sin(ANGLE_LEFT_SONAR*PI/180); // distance to the left, from the front sensor
-
-  // if too far from left deadband
-  if(leftLidarDist > max_deadband_cm){
-    Serial.print("dist: ");
-    Serial.print(leftLidarDist);
-    Serial.println(" | too far");
-    cmd.rightSpeed = base_speed + 125;
-  }
-  // if too close to left
-  else if(leftLidarDist < min_deadband_cm && leftLidarDist > 0){
-    Serial.print("dist: ");
-    Serial.print(leftLidarDist);
-    Serial.println(" | too close");
-    cmd.leftSpeed = base_speed + 125;
-  }
-  else{
-    Serial.print("dist: ");
-    Serial.print(leftLidarDist);
-    Serial.println(" | gooooood");
-  } // in left deadband
-  // if sensors don't detect left wall/object, then it's in RANDOM WANDER state
-  return cmd;
-}
-// Proportional Control 
-MotorCommand followRightWallP(){
-  MotorCommand cmd = {base_speed, base_speed, true};
-
-  const float desiredDist = 12.0;   // cm, between 10, 15 cm
-  const float Kp = 10.0;             // tuning gain
-
-  float leftLiDist = sensorData.leftLidar;
-  float distError = desiredDist - leftLiDist;
-
-  float turn = Kp * distError;
-  turn = constrain(turn, -125, 125);
-
-  cmd.leftSpeed  = base_speed + turn;
-  cmd.rightSpeed = base_speed - turn;
-
-  return cmd;
-}
 // PD Control (uses angle to approximate behavior instead of time)
 MotorCommand followRightWallPD() {
   MotorCommand cmd = {base_speed, base_speed, true};
@@ -464,8 +485,6 @@ MotorCommand followRightWallPD() {
     cmd.rightSpeed = base_speed * 1.2;
     return cmd; 
   }
-
-
   return cmd;
 }
 // PD Control (uses angle to approximate behavior instead of time)
@@ -528,16 +547,7 @@ MotorCommand avoidObstacle(){
   }
 
   // 3. STATE CHECK: Are we currently avoiding (either seeing it or recently saw it)?
-  if (millis() - preventTime < stateDelay) {
-    // Serial.print("millis: ");
-    // Serial.print(millis());
-    // Serial.print(", preventTime: ");
-    // Serial.print(preventTime);
-    // Serial.print(", stateDelay: ");
-    // Serial.print(stateDelay);
-    // Serial.print(", bool: ");
-    // Serial.println(millis() - preventTime < stateDelay);
-    
+  if (millis() - preventTime < stateDelay) {    
     cmd.active = true;
     digitalWrite(enableLED, HIGH);
 
@@ -555,6 +565,90 @@ MotorCommand avoidObstacle(){
 
   return cmd;
 }
+MotorCommand turnLeft() {
+  MotorCommand cmd = {0, 0, true};
+
+  if (!pathActionActive) {
+    pathActionActive = true;
+    actionStartTheta = robotTheta;
+    targetTheta = wrapAngle(robotTheta + PI/2);
+  }
+
+  float err = wrapAngle(targetTheta - robotTheta);
+
+  if (fabs(err) < TURN_TOL) {
+    pathActionActive = false;
+    pathIndex++;
+    return {0, 0, false};
+  }
+
+  int turnSpeed = constrain(400 * err, -600, 600);
+  cmd.leftSpeed  = -turnSpeed;
+  cmd.rightSpeed =  turnSpeed;
+
+  return cmd;
+}
+
+MotorCommand turnRight() {
+  MotorCommand cmd = {0, 0, true};
+
+  if (!pathActionActive) {
+    pathActionActive = true;
+    actionStartTheta = robotTheta;
+    targetTheta = wrapAngle(robotTheta - PI/2);
+  }
+
+  float err = wrapAngle(targetTheta - robotTheta);
+
+  if (fabs(err) < TURN_TOL) {
+    pathActionActive = false;
+    pathIndex++;
+    return {0, 0, false};
+  }
+
+  int turnSpeed = constrain(400 * err, -600, 600);
+  cmd.leftSpeed  = -turnSpeed;
+  cmd.rightSpeed =  turnSpeed;
+
+  return cmd;
+}
+
+MotorCommand goForward() {
+  MotorCommand cmd = {base_speed, base_speed, true};
+
+  if (!pathActionActive) {
+    pathActionActive = true;
+    actionStartX = robotX;
+    actionStartY = robotY;
+  }
+
+  float dx = robotX - actionStartX;
+  float dy = robotY - actionStartY;
+  float dist = sqrt(dx*dx + dy*dy);
+
+  if (dist >= CELL_FORWARD_DIST) {
+    pathActionActive = false;
+    pathIndex++;
+    return {0, 0, false};
+  }
+
+  return cmd;
+}
+
+MotorCommand startPath() {
+  pathActionActive = false;
+  pathIndex++;
+  return {0, 0, false};
+}
+// TODO
+MotorCommand terminatePath() {
+  digitalWrite(redLED, HIGH);
+  digitalWrite(ylwLED, HIGH);
+  digitalWrite(grnLED, HIGH);
+
+  return {0, 0, false};
+}
+
 // -----------------------------------------Layer 0 ------------------------------------------------------------------------
 // robot detects object too close, stops the robot
 MotorCommand collide(){
@@ -571,33 +665,6 @@ MotorCommand collide(){
     cmd.active = true;
     // collisionRecoveryTimer = millis(); // Start/Reset retreat timer
   }
-
-  /*
-  // 2. If we are within the retreat window, move FORWARD
-  if ((millis() - collisionRecoveryTimer < retreatDuration)) {
-    // To move forward, we need the opposite of our base_speed
-    // will not move backward if path is blocked
-    // because your APPLY section uses -cmd.speed
-    if(sensorData.rightLidar < sensorData.leftLidar){
-      cmd.leftSpeed = -base_speed; 
-      cmd.rightSpeed = -base_speed*speedMod;
-    } else if(sensorData.leftLidar < sensorData.rightLidar){
-      cmd.leftSpeed = -base_speed*speedMod; 
-      cmd.rightSpeed = -base_speed;
-    } else{
-      cmd.leftSpeed = -base_speed; 
-      cmd.rightSpeed = -base_speed;
-    }
-    
-    cmd.active = true;
-    
-    // Visual indicator of collision retreat
-    digitalWrite(redLED, HIGH); 
-  } else {
-    digitalWrite(redLED, LOW);
-  }
-  */
-
   return cmd;
 }
 // -------------------------------------- Main --------------------------------------------------------------------------------
@@ -627,7 +694,8 @@ void setup() {
 
 void loop() {
   updateSensorData();
-  updateNavState();
+  updateNavState_path();
+  updateNavState_wall_follow();
   updateOdometry();
 
   MotorCommand cmd = {0, 0, false};
@@ -663,6 +731,11 @@ void loop() {
   c = moveBehavior();
   if(c.active) {
     cmd = c;
+    goto APPLY;
+  }
+  MotorCommand p = movePathBehavior();
+  if (p.active || currPathState == TERMINATE) {
+    cmd = p;
     goto APPLY;
   }
 
