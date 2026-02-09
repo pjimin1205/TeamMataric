@@ -1,5 +1,7 @@
 #include <RPC.h>
 #include "Arduino.h"
+#include <HUSKYLENS.h>
+#include "Wire.h"
 
 /*
   SensorsM4.ino
@@ -67,6 +69,15 @@ int accumTicks[2] = {0, 0};         //variable to hold accumulated ticks since l
 // Temporary globals for pulse/sonar calculations
 float duration, distance;
 
+// Initialize Huskylens
+
+HUSKYLENS huskylens;
+int huskyLensX;
+int huskyLensY;
+int huskyLensWidth;
+int huskyLensHeight;
+
+
 // RPC-able sensor data packet. Mirrors the structure expected by M7.
 struct SensorPacket {
     int frontLidar;
@@ -77,12 +88,16 @@ struct SensorPacket {
     int frontRightSonar;
     int backLeftSonar;
     int backRightSonar;
-    int photoLeft;;
+    int photoLeft;
     int photoRight;
     int encoderLeft;
     int encoderRight;
+    int huskyLensY;
+    int huskyLensX;
+    int huskyLensWidth;
+    int huskyLensHeight;
     // This macro tells the RPC/MsgPack layer how to serialize fields
-    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar, photoLeft, photoRight, encoderLeft, encoderRight);
+    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar, photoLeft, photoRight, encoderLeft, encoderRight, huskyLensX, huskyLensY, huskyLensWidth, huskyLensHeight);
 };
 
 // Current sensor readings (populated each loop)
@@ -161,6 +176,10 @@ SensorPacket getSensorData() {
   data.photoRight = photoRightVal;
   data.encoderLeft = encoderLeftVal;
   data.encoderRight = encoderRightVal;
+  data.huskyLensY = huskyLensY;
+  data.huskyLensX = huskyLensX;
+  data.huskyLensWidth = huskyLensWidth;
+  data.huskyLensHeight = huskyLensHeight;
   return data;
 }
 
@@ -172,6 +191,7 @@ SensorPacket getSensorData() {
 */
 void setup() {
   RPC.begin();
+  Wire.begin();
   // Configure LIDAR pins as inputs--pulseIn will read digital pulses
   pinMode(frontLdr, OUTPUT);
   pinMode(backLdr, OUTPUT);
@@ -194,7 +214,7 @@ void setup() {
   pinMode(photoRightPin, INPUT);
   // Attach encoder interrupts
   attachInterrupt(digitalPinToInterrupt(ltEncoder), LwheelSpeed, CHANGE);    //init the interrupt mode for the left encoder
-  attachInterrupt(digitalPinToInterrupt(rtEncoder), RwheelSpeed, CHANGE);   //init the interrupt mode for the right encoder
+  attachInterrupt(digitalPinToInterrupt(rtEncoder), RwheelSpeed, CHANGE);    //init the interrupt mode for the right encoder
 
 
   delay(500); // allow sensors and buses to stabilize
@@ -211,6 +231,7 @@ void setup() {
   The `getSensorData` RPC handler uses those globals to build packets.
 */
 void loop() {
+  HUSKYLENSResult result = huskylens.read;
   front = read_lidar(frontLdr);
   back = read_lidar(backLdr);
   left = read_lidar(leftLdr);
@@ -223,6 +244,18 @@ void loop() {
   photoRightVal = analogRead(photoRightPin);
   encoderLeftVal = encoder[LEFT];
   encoderRightVal = encoder[RIGHT];
+
+  if(!huskylens.available()) {
+    huskyLensX = 0;
+    huskyLensY = 0;
+    huskyLensWidth = 0;
+    huskyLensHeight = 0;
+  }else{
+    huskyLensX = result.xCenter;
+    huskyLensY = result.yCenter;
+    huskyLensWidth = result.width;
+    huskyLensHeight = result.objectHeight;
+  }
 }
 
 

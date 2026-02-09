@@ -42,7 +42,7 @@ float goalY = -30*3;    // Target 3 foot to the left
 unsigned long lastOdoPrint = 0;
 
 // Goal Flag
-bool goalSet = false;
+bool goalSet = true;
 bool goalReached = false;
 
 
@@ -110,16 +110,8 @@ struct SensorPacket {
     int frontRightSonar;
     int backLeftSonar;
     int backRightSonar;
-    int photoLeft;;
-    int photoRight;
-    int encoderLeft;
-    int encoderRight;
-    int huskyLensY;
-    int huskyLensX;
-    int huskyLensWidth;
-    int huskyLensHeight;
-    // This macro tells the RPC/MsgPack layer how to serialize fields
-    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar, photoLeft, photoRight, encoderLeft, encoderRight, huskyLensX, huskyLensY, huskyLensWidth, huskyLensHeight);
+    // This line tells the RPC library how to pack the data
+    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar);
 };
 unsigned long lastSensorRequest = 0;
 const long sensorInterval = 100; // Query sensors every 100 ms
@@ -150,10 +142,6 @@ void updateSensorData(){
       Serial.print(" | RSonar: "); Serial.print(sensorData.frontRightSonar);
       Serial.print(" | BLSonar: "); Serial.print(sensorData.backLeftSonar);
       Serial.print(" | BRSonar: "); Serial.print(sensorData.backRightSonar);
-      Serial.print(" | PhotoLeft: "); Serial.print(sensorData.photoLeft);
-      Serial.print(" | PhotoRight: "); Serial.print(sensorData.photoRight);
-      Serial.print(" | EncoderLeft: "); Serial.print(sensorData.encoderLeft);
-      Serial.print(" | EncoderRight: "); Serial.print(sensorData.encoderRight);
       Serial.println();
     }
   }
@@ -190,15 +178,15 @@ void updateOdometry() {
     lastLeftSteps = currLeft;
     lastRightSteps = currRight;
 
-    // if (millis() - lastOdoPrint > 500) { // Print every 500ms
-    //     lastOdoPrint = millis();
-    //     Serial.print("Pose: X=");
-    //     Serial.print(robotX);
-    //     Serial.print(" Y=");
-    //     Serial.print(robotY);
-    //     Serial.print(" Theta=");
-    //     Serial.println(robotTheta * 180 / PI); // Convert to degrees for readability
-    // }
+    if (millis() - lastOdoPrint > 500) { // Print every 500ms
+        lastOdoPrint = millis();
+        Serial.print("Pose: X=");
+        Serial.print(robotX);
+        Serial.print(" Y=");
+        Serial.print(robotY);
+        Serial.print(" Theta=");
+        Serial.println(robotTheta * 180 / PI); // Convert to degrees for readability
+    }
 }
 enum NavState { // state machine, only affects goal/navigation behaviors
   LEFT_WALL,
@@ -206,7 +194,6 @@ enum NavState { // state machine, only affects goal/navigation behaviors
   CENTER,
   AVOID,
   RANDOM_WANDER,
-  FOLLOW_LIGHT,
   GO_TO_GOAL
 };
 NavState currState = RANDOM_WANDER;  // Change this to switch modes
@@ -224,16 +211,11 @@ void updateNavState() {
       // avoidStartTime = millis();   
       return;// Stay in current state but let avoidance handle it
     }
-  Serial.println(currState);
+  //Serial.println(currState);
   bool leftWallPresent = (sensorData.rightLidar > 0 && sensorData.rightLidar < 30);
   bool rightWallPresent = (sensorData.leftLidar > 0 && sensorData.leftLidar < 30);
-  bool leftLightPresent = (sensorData.photoRight > 800); // adjust threshold as needed
-  bool rightLightPresent = (sensorData.photoLeft > 800); // adjust threshold as needed
-
-  if(leftLightPresent || rightLightPresent){ // sees both lights
-    currState = FOLLOW_LIGHT;
-  }
-  else if(leftWallPresent && rightWallPresent){ // sees both walls
+ 
+  if(leftWallPresent && rightWallPresent){ // sees both walls
     currState = CENTER;
     wallLostTimestamp = 0;
   }
@@ -354,8 +336,6 @@ MotorCommand goToGoal(float targetX, float targetY) {
 // collection of layer 1 movements, this is layer 2 because it has logic.
 MotorCommand moveBehavior(){
   switch (currState){
-    case FOLLOW_LIGHT:
-      return followLight();
     case LEFT_WALL:
       return followLeftWallPD();
     case RIGHT_WALL:
@@ -572,31 +552,6 @@ MotorCommand avoidObstacle(){
   } else {
     digitalWrite(enableLED, LOW);
   }
-
-  return cmd;
-}
-
-// P control to follow light source
-MotorCommand followLight(){
-  MotorCommand cmd = {base_speed, base_speed, true};
-
-  int leftPhoto = sensorData.photoLeft;
-  int rightPhoto = sensorData.photoRight;
-
-  // LED Requirement: Turn on ALL 3 LEDs when following light [cite: 244, 269]
-  digitalWrite(redLED, HIGH);
-  digitalWrite(ylwLED, HIGH);
-  digitalWrite(grnLED, HIGH);
-
-  // Simple proportional control towards light
-  int photoDiff = leftPhoto - rightPhoto;
-  const float Kp_light = 0.33; // Gain for light following
-
-  float turn = Kp_light * photoDiff;
-  turn = constrain(turn, -250, 250);
-
-  cmd.leftSpeed  = base_speed - turn;
-  cmd.rightSpeed = base_speed + turn;
 
   return cmd;
 }
