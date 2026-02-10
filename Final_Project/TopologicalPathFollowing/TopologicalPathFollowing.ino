@@ -110,8 +110,16 @@ struct SensorPacket {
     int frontRightSonar;
     int backLeftSonar;
     int backRightSonar;
-    // This line tells the RPC library how to pack the data
-    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar);
+    int photoLeft;
+    int photoRight;
+    int encoderLeft;
+    int encoderRight;
+    int huskyLensY;
+    int huskyLensX;
+    int huskyLensWidth;
+    int huskyLensHeight;
+    // This macro tells the RPC/MsgPack layer how to serialize fields
+    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar, photoLeft, photoRight, encoderLeft, encoderRight, huskyLensX, huskyLensY, huskyLensWidth, huskyLensHeight);
 };
 unsigned long lastSensorRequest = 0;
 const long sensorInterval = 100; // Query sensors every 100 ms
@@ -717,6 +725,7 @@ void loop() {
 
   MotorCommand cmd = {0, 0, false};
   MotorCommand c;
+  MotorCommand p;
   
   // 1. DEFAULT: If no goal, default to forward wander. If goal, default to stop.
   if(!goalSet) {
@@ -750,7 +759,7 @@ void loop() {
     cmd = c;
     goto APPLY;
   }
-  MotorCommand p = movePathBehavior();
+  p = movePathBehavior();
   if (p.active || currPathState == TERMINATE) {
     cmd = p;
     goto APPLY;

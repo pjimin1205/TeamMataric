@@ -231,7 +231,6 @@ void setup() {
   The `getSensorData` RPC handler uses those globals to build packets.
 */
 void loop() {
-  HUSKYLENSResult result = huskylens.read;
   front = read_lidar(frontLdr);
   back = read_lidar(backLdr);
   left = read_lidar(leftLdr);
@@ -251,10 +250,13 @@ void loop() {
     huskyLensWidth = 0;
     huskyLensHeight = 0;
   }else{
-    huskyLensX = result.xCenter;
-    huskyLensY = result.yCenter;
-    huskyLensWidth = result.width;
-    huskyLensHeight = result.objectHeight;
+    while(huskylens.available()){
+      HUSKYLENSResult result = huskylens.read();
+      huskyLensX = result.xCenter;
+      huskyLensY = result.yCenter;
+      huskyLensWidth = result.width;
+      huskyLensHeight = result.height;
+    }
   }
 }
 
