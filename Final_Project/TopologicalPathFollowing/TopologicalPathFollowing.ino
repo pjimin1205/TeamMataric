@@ -251,7 +251,6 @@ void updateNavState_wall_follow() {
   }
 }
 
-char path[] = "SFFRFFFRFT";
 int pathIndex = 0; // update path index once a move has been completed
 
 bool pathActionActive = false;
@@ -272,6 +271,7 @@ const float CELL_FORWARD_DIST = 45.0;      // hallway length (~18 in)
 
 enum NavPathState { LEFT, RIGHT, FORWARD, START, TERMINATE};
 NavPathState currPathState = START;
+char path[] = "SFFRFFFRFT";
 
 /*
   Sets the current path state between turn LEFT, RIGHT, FORWARD, START, TERMINATE
@@ -419,6 +419,24 @@ MotorCommand moveBehavior(){
       return {0, 0, false};
   }
 }
+
+MotorCommand movePathBehavior(){
+  switch (currState){
+    case LEFT:
+      return turnLeft();
+    case RIGHT:
+      return turnRight();
+    case FORWARD:
+      return goForward();
+    case START:
+      return startPath();
+    case TERMINATE:
+      return terminatePath();
+    default:
+      return {0, 0, false};
+  }
+}
+
 MotorCommand followCenter(){
   MotorCommand cmd = {base_speed, base_speed, true};
 
@@ -582,7 +600,7 @@ MotorCommand turnLeft() {
     return {0, 0, false};
   }
 
-  int turnSpeed = constrain(400 * err, -600, 600);
+  int turnSpeed = constrain(400 * err, -600, 600); // P control
   cmd.leftSpeed  = -turnSpeed;
   cmd.rightSpeed =  turnSpeed;
 
@@ -640,7 +658,6 @@ MotorCommand startPath() {
   pathIndex++;
   return {0, 0, false};
 }
-// TODO
 MotorCommand terminatePath() {
   digitalWrite(redLED, HIGH);
   digitalWrite(ylwLED, HIGH);
@@ -728,7 +745,7 @@ void loop() {
 
   // --- LAYER 3: NAVIGATION (Wall Following / Center) ---
   // If no goal is set, or if goToGoal is inactive, follow walls.
-  c = moveBehavior();
+  // c = moveBehavior();
   if(c.active) {
     cmd = c;
     goto APPLY;
