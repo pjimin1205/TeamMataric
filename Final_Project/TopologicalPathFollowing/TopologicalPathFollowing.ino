@@ -2,6 +2,11 @@
 #include <Arduino.h>//include for PlatformIO Ide
 #include <AccelStepper.h>//include the stepper motor library
 #include <MultiStepper.h>//include multiple stepper motor library
+
+// MQTT libraries
+#include <ArduinoMqttClient.h>
+#include <WiFi.h>
+
 // --------------------------------------- Constant Vars -------------------------------------------------------------
 #define INCHES_TO_CM 2.54 //conversion factor from inches to centimeters
 #define TWO_FEET_IN_STEPS 1848 //number of steps to move robot forward 2 feet
@@ -27,6 +32,39 @@ int leds[3] = {5,6,7};      //array of LED pin numbers
 #define ltStepPin 52 //left stepper motor step pin 
 #define ltDirPin 53  //left stepper motor direction pin
 
+struct SensorPacket {
+    int frontLidar;
+    int backLidar;
+    int leftLidar;
+    int rightLidar;
+    int frontLeftSonar;
+    int frontRightSonar;
+    int backLeftSonar;
+    int backRightSonar;
+    int photoLeft;
+    int photoRight;
+    int encoderLeft;
+    int encoderRight;
+    int huskyLensY;
+    int huskyLensX;
+    int huskyLensWidth;
+    int huskyLensHeight;
+    // This macro tells the RPC/MsgPack layer how to serialize fields
+    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar, photoLeft, photoRight, encoderLeft, encoderRight, huskyLensX, huskyLensY, huskyLensWidth, huskyLensHeight);
+};
+
+struct MotorCommand{
+  int leftSpeed;
+  int rightSpeed;
+  bool active;
+};
+
+char path[] = "SFRFLFT";
+
+int pathIndex = 0; // update path index once a move has been completed
+
+
+
 // --------------------------------- goToGoal Initial Vars -------------------------------------------------------------------
 // Odometry Variables
 float robotX = 0.0;     // cm
@@ -42,10 +80,10 @@ float goalY = -30*3;    // Target 3 foot to the left
 unsigned long lastOdoPrint = 0;
 
 // Goal Flag
-bool goalSet = true;
+bool goalSet = false;
 bool goalReached = false;
 
-
+// --------------------------------- MORE MOTOR & SENSOR STUFF ----------------------------
 AccelStepper stepperRight(AccelStepper::DRIVER, rtStepPin, rtDirPin);//create instance of right stepper motor object (2 driver pins, low to high transition step pin 52, direction input pin 53 (high means forward)
 AccelStepper stepperLeft(AccelStepper::DRIVER, ltStepPin, ltDirPin);//create instance of left stepper motor object (2 driver pins, step pin 50, direction input pin 51)
 MultiStepper steppers;//create instance to control multiple steppers at the same time
@@ -83,12 +121,6 @@ float forceVectorx = 0;
 float forceVectory = 0;
 float forceVectorAngle = 0;
 
-struct MotorCommand{
-  int leftSpeed;
-  int rightSpeed;
-  bool active;
-};
-
 // ------------------------------------- Sensors -------------------------------------------------------------------
 const float ANGLE_LEFT_SONAR = 45.0;     // Left sonar at 45 degrees
 const float ANGLE_RIGHT_SONAR = -45.0;   // Right sonar at -45 degrees
@@ -99,32 +131,150 @@ const float ANGLE_RIGHT_LIDAR = -90.0;   // Right LIDAR at -90 degrees
 const float ANGLE_BACK_LEFT_SONAR = 90.0;
 const float ANGLE_BACK_RIGHT_SONAR = -90.0;
 
-bool sensorsReady = false; // Flag to indicate if sensors have been initialized
-
-struct SensorPacket {
-    int frontLidar;
-    int backLidar;
-    int leftLidar;
-    int rightLidar;
-    int frontLeftSonar;
-    int frontRightSonar;
-    int backLeftSonar;
-    int backRightSonar;
-    int photoLeft;
-    int photoRight;
-    int encoderLeft;
-    int encoderRight;
-    int huskyLensY;
-    int huskyLensX;
-    int huskyLensWidth;
-    int huskyLensHeight;
-    // This macro tells the RPC/MsgPack layer how to serialize fields
-    MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar, photoLeft, photoRight, encoderLeft, encoderRight, huskyLensX, huskyLensY, huskyLensWidth, huskyLensHeight);
-};
 unsigned long lastSensorRequest = 0;
-const long sensorInterval = 100; // Query sensors every 100 ms
+const long sensorPollInterval = 100; // Query sensors every 100 ms
 SensorPacket sensorData;
 bool printSenRead = false; // for debug
+
+enum NavPathState { LEFT, RIGHT, FORWARD, START, TERMINATE};
+NavPathState currPathState = START;
+bool pathActionActive = false;
+
+// ---------------------------------- WIFI Set-Up ---------------------------------
+char ssid[] = "RHIT-OPEN";        // your network SSID
+char pass[] = "";    // your network password
+
+//create the objects
+WiFiClient wifiClient;
+MqttClient mqttClient(wifiClient);
+
+// MQTT set-up
+const char broker[] = "broker.hivemq.com";
+int port = 1883;
+const char topicSubscribe[]  = "ece445/parkj10/to_arduino";
+const char topicPublish[]  = "ece445/parkj10/to_matlab";
+const char sensorsTopicPublish[]  = "ece445/parkj10/sensors_to_matlab";
+unsigned long previousMillis = 0;
+const long sensorPublishInterval = 200; // ms interval between sensor data publishes
+
+void setupMQTTConnection(){
+  // attempt to connect to Wifi network:
+  Serial.print("Attempting to connect to SSID: ");
+  Serial.println(ssid);
+  while (WiFi.begin(ssid, pass) != WL_CONNECTED) {
+    // failed, retry
+    Serial.print(".");
+    delay(5000);
+  }
+
+  Serial.println("You're connected to the network");
+  Serial.println();
+
+  Serial.print("Attempting to connect to the MQTT broker: ");
+  Serial.println(broker);
+
+  if (!mqttClient.connect(broker, port)) {
+    Serial.print("MQTT connection failed! Error code = ");
+    Serial.println(mqttClient.connectError());
+
+    while (1);
+  }
+  Serial.println("You're connected to the MQTT broker!");
+  Serial.println();
+
+  // set the message receive callback
+  mqttClient.onMessage(onMqttMessage);
+  
+  Serial.print("Subscribing to topic: ");
+  Serial.println(topicSubscribe);
+  Serial.println();
+
+  // subscribe to a topic
+  mqttClient.subscribe(topicSubscribe);
+  Serial.print("Topic: ");
+  Serial.println(topicSubscribe);
+  Serial.println();
+
+  // Serial.print("Subscription status: ");
+  // Serial.println(mqttClient.subscribed(topicSubscribe) ? "SUCCESS" : "FAILED");
+}
+
+void onMqttMessage(int messageSize) {
+  String message = "";
+  while (mqttClient.available()) {
+    message += (char)mqttClient.read();
+  }
+  message.trim(); // remove whitespace/newlines
+  Serial.println("Received message: " + message);
+  // ---------------- LED COMMANDS ----------------
+  if (message == "RED_ON") {
+    digitalWrite(redLED, HIGH);
+    sendMessage("RED LED turned ON");
+    return;
+  }
+  if (message == "RED_OFF") {
+    digitalWrite(redLED, LOW);
+    sendMessage("TEXT:RED LED turned OFF");
+    return;
+  }
+  // ---------------- PATH COMMAND ----------------
+  if (message.startsWith("PATH:")) {
+    String pathStr = message.substring(5); // remove "PATH:"
+    pathStr.trim();
+    // Safety check
+    if (pathStr.length() >= sizeof(path)) {
+      sendMessage("TEXT:Path error: too long");
+      return;
+    }
+    // Copy into char array
+    pathStr.toCharArray(path, sizeof(path));
+    // Reset pathTEXT:Path loadedstate
+    pathIndex = 0;
+    currPathState = START;
+    pathActionActive = false;
+    sendMessage("TEXT:Path loaded:" + pathStr);
+    Serial.print("New path loaded: ");
+    Serial.println(pathStr);
+    return;
+  }
+  // ---------------- UNKNOWN COMMAND ----------------
+  sendMessage("TEXT:Unknown command:" + message);
+}
+
+void sendMessage(String message){
+    // print to serial monitor
+    Serial.print("Sending message:  ");
+    Serial.print(message); Serial.print(" |");
+    Serial.print(" to topic:  "); Serial.println(topicPublish);
+
+    //publish the message to the specific topic
+    mqttClient.beginMessage(topicPublish);
+    mqttClient.print(message);
+    mqttClient.endMessage();
+}
+
+bool sensorsReady = false; // Flag to indicate if sensors have been initialized
+
+void publishSensorData() {
+    // Create a formatted string with all sensor values
+    String sensorMsg = String(sensorData.frontLidar) + "," +
+                       String(sensorData.backLidar) + "," +
+                       String(sensorData.leftLidar) + "," +
+                       String(sensorData.rightLidar) + "," +
+                       String(sensorData.frontLeftSonar) + "," +
+                       String(sensorData.frontRightSonar) + "," +
+                       String(sensorData.backLeftSonar) + "," +
+                       String(sensorData.backRightSonar);
+    
+    mqttClient.beginMessage(sensorsTopicPublish);
+    mqttClient.print(sensorMsg);
+    mqttClient.endMessage();
+}
+
+
+
+
+unsigned long lastSensorPublish = -5000;
 
 /*
   updateSensorData()
@@ -136,7 +286,7 @@ bool printSenRead = false; // for debug
 */
 void updateSensorData(){
   // Only talk to the M4 every 100ms
-  if (millis() - lastSensorRequest >= sensorInterval) {
+  if (millis() - lastSensorRequest >= sensorPollInterval) {
     lastSensorRequest = millis();
     auto res = RPC.call("getSensorData");
     sensorData = res.as<SensorPacket>();
@@ -259,10 +409,6 @@ void updateNavState_wall_follow() {
   }
 }
 
-int pathIndex = 0; // update path index once a move has been completed
-
-bool pathActionActive = false;
-
 // Odometry targets
 float targetTheta = 0;
 float targetDistance = 0;
@@ -276,10 +422,6 @@ float actionStartTheta = 0;
 const float TURN_TOL = 3.0 * DEG_TO_RAD;   // ~3 deg
 const float DIST_TOL = 2.0;                // cm
 const float CELL_FORWARD_DIST = 45.0;      // hallway length (~18 in)
-
-enum NavPathState { LEFT, RIGHT, FORWARD, START, TERMINATE};
-NavPathState currPathState = START;
-char path[] = "SFFRFFFRFT";
 
 /*
   Sets the current path state between turn LEFT, RIGHT, FORWARD, START, TERMINATE
@@ -429,7 +571,7 @@ MotorCommand moveBehavior(){
 }
 
 MotorCommand movePathBehavior(){
-  switch (currState){
+  switch (currPathState){
     case LEFT:
       return turnLeft();
     case RIGHT:
@@ -705,6 +847,8 @@ void setup() {
   //initial sensor
   delay(2000); 
 
+  setupMQTTConnection();
+
   // Wait until we get a reading that isn't zero from a known sensor
   Serial.println("Waiting for valid sensor data...");
   while (!sensorsReady) {
@@ -722,7 +866,18 @@ void loop() {
   updateNavState_path();
   updateNavState_wall_follow();
   updateOdometry();
+  mqttClient.poll();
 
+  //MQTT publishing logic:
+  unsigned long currentMillis = millis();
+  
+  if (currentMillis - lastSensorPublish >= sensorPublishInterval) {
+    lastSensorPublish = currentMillis;
+    publishSensorData();
+    // Serial.println("published sensor data");
+  }
+
+  // Subsumptive architecture
   MotorCommand cmd = {0, 0, false};
   MotorCommand c;
   MotorCommand p;
