@@ -105,6 +105,12 @@ void onMqttMessage(int messageSize) {
     sendMessage("YELLOW LED turned OFF");
   }
   Serial.println("recieved message: "+String(message));
+  
+  // For debug, sends confirmation of data received
+  String sensorMsg = "recieved message: "+String(message);
+  mqttClient.beginMessage(topicPublish);
+  mqttClient.print(sensorMsg);
+  mqttClient.endMessage();
 }
 
 void sendMessage(String message){
