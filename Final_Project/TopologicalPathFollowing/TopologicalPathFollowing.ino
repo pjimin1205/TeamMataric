@@ -2,6 +2,7 @@
 #include <Arduino.h>//include for PlatformIO Ide
 #include <AccelStepper.h>//include the stepper motor library
 #include <MultiStepper.h>//include multiple stepper motor library
+#include <queue>
 
 // MQTT libraries
 #include <ArduinoMqttClient.h>
@@ -17,6 +18,7 @@
 #define CM_TO_STEPS_CONV (STEPS_PER_ROT/(float)CM_PER_ROTATION) //conversion factor from centimeters to steps
 #define ENCODER_TICKS_PER_ROTATION 20 //number of encoder ticks per wheel rotation
 #define CM_PER_FOOT 30.48 // number of centimeters in a foot
+#define CELL_SIZE_CM 46.0 // size of a cell in the grid for path following
 // ------------------------------------- LED's -------------------------------------------------------------------------
 #define redLED 5            //red LED for displaying states
 #define greenLED 6            //green LED for displaying states
@@ -31,6 +33,52 @@ int leds[3] = {5,6,7};      //array of LED pin numbers
 #define rtDirPin 51  // right stepper motor direction pin 
 #define ltStepPin 52 //left stepper motor step pin 
 #define ltDirPin 53  //left stepper motor direction pin
+
+struct MotorCommand{
+  int leftSpeed;
+  int rightSpeed;
+  bool active;
+};
+
+// grass fire path planning
+#define ROWS 4
+#define COLS 4
+#define EMPTY 0
+#define OBSTACLE 99
+#define START_VAL 100
+#define GOAL_VAL 101
+
+
+struct Point {
+  int r, c;
+};
+
+Point pathCoords[ROWS * COLS];
+int pathLength = 0;
+int currentPathStep = 0;
+
+int8_t grid[ROWS][COLS] = {
+  {0, 99, 99, 0},
+  {0, 0, 0, 0},
+  {0, 99, 99, 0},
+  {100, 99,  101, 0}
+};
+
+int distGrid[ROWS][COLS];
+
+
+// Directions for 8-way movement
+const int dr[] = {-1, 1, 0, 0, -1, -1, 1, 1};
+const int dc[] = {0, 0, -1, 1, -1, 1, -1, 1};
+
+// Simple Circular Buffer for BFS (Avoids std::queue memory issues)
+Point queue[ROWS * COLS];
+int head = 0;
+int tail = 0;
+
+void push(Point p) { queue[tail++] = p; }
+Point pop() { return queue[head++]; }
+bool isEmpty() { return head == tail; }
 
 struct SensorPacket {
     int frontLidar;
@@ -53,17 +101,10 @@ struct SensorPacket {
     MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar, photoLeft, photoRight, encoderLeft, encoderRight, huskyLensX, huskyLensY, huskyLensWidth, huskyLensHeight);
 };
 
-struct MotorCommand{
-  int leftSpeed;
-  int rightSpeed;
-  bool active;
-};
-
-char path[] = "SFRFLFT";
+#define MAX_PATH_LEN 50
+char path[MAX_PATH_LEN] = "";
 
 int pathIndex = 0; // update path index once a move has been completed
-
-
 
 // --------------------------------- goToGoal Initial Vars -------------------------------------------------------------------
 // Odometry Variables
@@ -195,6 +236,8 @@ void setupMQTTConnection(){
   Serial.println(topicSubscribe);
   Serial.println();
 
+  sendMessage("TEXT:Connected to MQTT");
+
   // Serial.print("Subscription status: ");
   // Serial.println(mqttClient.subscribed(topicSubscribe) ? "SUCCESS" : "FAILED");
 }
@@ -218,8 +261,9 @@ void onMqttMessage(int messageSize) {
     return;
   }
   // ---------------- PATH COMMAND ----------------
+  String pathStr = "";
   if (message.startsWith("PATH:")) {
-    String pathStr = message.substring(5); // remove "PATH:"
+    pathStr = message.substring(5); // remove "PATH:"
     pathStr.trim();
     // Safety check
     if (pathStr.length() >= sizeof(path)) {
@@ -237,6 +281,48 @@ void onMqttMessage(int messageSize) {
     Serial.println(pathStr);
     return;
   }
+  // -------- PATH FORMAT VALIDATION --------
+  if (pathStr.length() < 2) {
+    sendMessage("TEXT:Path error: too short");
+    return;
+  }
+
+  if (pathStr[0] != 'S') {
+    sendMessage("TEXT:Path error: must start with S");
+    return;
+  }
+
+  if (pathStr[pathStr.length()-1] != 'T') {
+    sendMessage("TEXT:Path error: must end with T");
+    return;
+  }
+
+  for (int i = 0; i < pathStr.length(); i++) {
+    char c = pathStr[i];
+    if (c != 'S' && c != 'F' && c != 'L' && c != 'R' && c != 'T') {
+      sendMessage("TEXT:Path error: invalid character");
+      return;
+    }
+  }
+
+  if (pathStr.length() >= MAX_PATH_LEN) {
+    sendMessage("TEXT:Path error: too long");
+    return;
+  }
+
+  // -------- COPY INTO GLOBAL BUFFER --------
+  pathStr.toCharArray(path, MAX_PATH_LEN);
+
+  // -------- RESET EXECUTION STATE --------
+  pathIndex = 0;
+  currPathState = START;
+  pathActionActive = false;
+
+  sendMessage("TEXT:Path loaded:" + pathStr);
+
+  Serial.print("New path loaded: ");
+  Serial.println(pathStr);
+
   // ---------------- UNKNOWN COMMAND ----------------
   sendMessage("TEXT:Unknown command:" + message);
 }
@@ -252,7 +338,6 @@ void sendMessage(String message){
     mqttClient.print(message);
     mqttClient.endMessage();
 }
-
 bool sensorsReady = false; // Flag to indicate if sensors have been initialized
 
 void publishSensorData() {
@@ -270,9 +355,6 @@ void publishSensorData() {
     mqttClient.print(sensorMsg);
     mqttClient.endMessage();
 }
-
-
-
 
 unsigned long lastSensorPublish = -5000;
 
@@ -421,41 +503,28 @@ float actionStartTheta = 0;
 // Tunables - may be able to delete later
 const float TURN_TOL = 3.0 * DEG_TO_RAD;   // ~3 deg
 const float DIST_TOL = 2.0;                // cm
-const float CELL_FORWARD_DIST = 45.0;      // hallway length (~18 in)
+const float CELL_FORWARD_DIST = 46.0;      // hallway length (~18 in)
 
 /*
   Sets the current path state between turn LEFT, RIGHT, FORWARD, START, TERMINATE
   Shouldn't need to account for blocked state because path accounts for that already.
 */
 void updateNavState_path() {
-  if (pathActionActive) return; // wait until current action finishes
+  if (pathActionActive) return;
 
-  char cmd = path[pathIndex];
+  // Safety: stop if we hit end of string
+  if (path[pathIndex] == '\0') {
+    currPathState = TERMINATE;
+    return;
+  }
 
   switch (cmd) {
-    case 'S':
-      currPathState = START;
-      break;
-
-    case 'F':
-      currPathState = FORWARD;
-      break;
-
-    case 'L':
-      currPathState = LEFT;
-      break;
-
-    case 'R':
-      currPathState = RIGHT;
-      break;
-
-    case 'T':
-      currPathState = TERMINATE;
-      break;
-
-    default:
-      currPathState = TERMINATE;
-      break;
+    case 'S': currPathState = START; break;
+    case 'F': currPathState = FORWARD; break;
+    case 'L': currPathState = LEFT; break;
+    case 'R': currPathState = RIGHT; break;
+    case 'T': currPathState = TERMINATE; break;
+    default: currPathState = TERMINATE; break;
   }
 }
 
@@ -494,6 +563,7 @@ void init_stepper(){
 // -----------------------------------------Layer 3 ------------------------------------------------------------------------
 int randLeftSpeed = base_speed;
 int randRightSpeed = base_speed;
+
 MotorCommand randomWander(){
   digitalWrite(redLED, HIGH);//turn on red LED
   digitalWrite(ylwLED, HIGH);//turn on yellow LED
@@ -506,6 +576,135 @@ MotorCommand randomWander(){
   }
   
   return {randLeftSpeed, randRightSpeed, true};
+}
+
+void runGrassfire() {
+  head = 0; tail = 0; // Reset queue
+  Point goal = {-1, -1};
+
+  // Initialize distance grid
+  for (int r = 0; r < ROWS; r++) {
+    for (int c = 0; c < COLS; c++) {
+      distGrid[r][c] = -1; 
+      if (grid[r][c] == GOAL_VAL) {
+        goal = {r, c};
+        distGrid[r][c] = 0;
+      }
+    }
+  }
+
+  if (goal.r == -1) {
+    Serial.println("Error: No Goal (X) found in grid!");
+    return;
+  }
+
+  push(goal);
+
+  while (!isEmpty()) {
+    Point curr = pop();
+
+    for (int i = 0; i < 8; i++) {
+      int nr = curr.r + dr[i];
+      int nc = curr.c + dc[i];
+
+      // Boundary and Obstacle Check
+      if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
+        if (distGrid[nr][nc] == -1 && grid[nr][nc] != OBSTACLE) {
+          distGrid[nr][nc] = distGrid[curr.r][curr.c] + 1;
+          push({nr, nc});
+        }
+      }
+    }
+  }
+  sendDistanceMap(); // Sends the map to MQTT
+  printResults();
+}
+
+void printResults() {
+  Serial.println("\n--- Grassfire Distance Map ---");
+  for (int r = 0; r < ROWS; r++) {
+    for (int c = 0; c < COLS; c++) {
+      if (grid[r][c] == OBSTACLE) Serial.print("##\t");
+      else if (distGrid[r][c] == -1) Serial.print("??\t");
+      else {
+        Serial.print(distGrid[r][c]);
+        Serial.print("\t");
+      }
+    }
+    Serial.println();
+  }
+  Serial.println("------------------------------\n");
+}
+
+void sendDistanceMap() {
+  // Build one big string with all grid data
+  String gridMsg = "GRID:" + String(ROWS) + "," + String(COLS) + ":";
+  
+  for (int r = 0; r < ROWS; r++) {
+    for (int c = 0; c < COLS; c++) {
+      if (grid[r][c] == OBSTACLE) {
+        gridMsg += "-2";  // Obstacle
+      } else if (distGrid[r][c] == -1) {
+        gridMsg += "-1";  // Unknown
+      } else {
+        gridMsg += String(distGrid[r][c]);
+      }
+      
+      // Add separator (comma between columns, semicolon between rows)
+      if (c < COLS - 1) {
+        gridMsg += ",";  // Comma between columns
+      } else if (r < ROWS - 1) {
+        gridMsg += ";";  // Semicolon between rows
+      }
+    }
+  }
+  
+  sendMessage(gridMsg);
+  sendMessage("TEXT:Grassfire complete");
+}
+
+void generatePath() {
+    Point start;
+    // Find S in the grid
+    for (int r = 0; r < ROWS; r++) {
+        for (int c = 0; c < COLS; c++) {
+            if (grid[r][c] == START_VAL) { start = {r, c}; break; }
+        }
+    }
+
+    Point curr = start;
+    pathLength = 0;
+    pathCoords[pathLength++] = curr;
+
+    // While we aren't at the goal (distance 0)
+    while (distGrid[curr.r][curr.c] != 0) {
+        for (int i = 0; i < 8; i++) {
+            int nr = curr.r + dr[i];
+            int nc = curr.c + dc[i];
+
+            if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
+                // Move to the neighbor that is exactly 1 step closer to the goal
+                if (distGrid[nr][nc] == distGrid[curr.r][curr.c] - 1) {
+                    curr = {nr, nc};
+                    pathCoords[pathLength++] = curr;
+                    break; 
+                }
+            }
+        }
+        if (pathLength > ROWS * COLS) break; // Safety break
+    }
+}
+
+void updateTargetFromPath() {
+    if (currentPathStep < pathLength) {
+        // Convert grid (row, col) to real world (x, y)
+        // Note: Rows usually map to X and Cols to Y, or vice versa depending on your orientation
+        goalX = pathCoords[currentPathStep].r * CELL_SIZE_CM;
+        goalY = pathCoords[currentPathStep].c * CELL_SIZE_CM;
+        goalSet = true;
+    } else {
+        goalSet = false; // Path finished
+    }
 }
 
 MotorCommand goToGoal(float targetX, float targetY) {
@@ -859,12 +1058,13 @@ void setup() {
     }
     delay(100); 
   }
+  runGrassfire();
 }
 
 void loop() {
   updateSensorData();
-  updateNavState_path();
-  updateNavState_wall_follow();
+  //updateNavState_path();
+  //updateNavState_wall_follow();
   updateOdometry();
   mqttClient.poll();
 
@@ -889,6 +1089,7 @@ void loop() {
     cmd = {0, 0, false};
   }
   
+  /*
   // --- LAYER 0: COLLISION (Highest Priority) ---
   c = collide();
   if(c.active){ cmd = c; goto APPLY; }
@@ -925,4 +1126,38 @@ void loop() {
     stepperRight.setSpeed(-cmd.rightSpeed);
     stepperLeft.runSpeed();
     stepperRight.runSpeed();
+
+  */
+
+  // 1. Check if we reached the current waypoint
+  if (goalSet) {
+      float dx = goalX - robotX;
+      float dy = goalY - robotY;
+      float dist = sqrt(dx*dx + dy*dy);
+
+      if (dist < 5.0) { // If within 5cm of current cell center
+          currentPathStep++;
+          updateTargetFromPath(); // Get next coordinate
+      }
+  }
+  
+  // --- LAYER 0: COLLISION ---
+  c = collide();
+  if(c.active) { cmd = c; goto APPLY; }
+
+  // --- LAYER 1: OBSTACLE AVOIDANCE ---
+  c = avoidObstacle();
+  if(c.active) { cmd = c; goto APPLY; }
+
+  // --- LAYER 2: GRASSFIRE PATH FOLLOWING ---
+  if(goalSet) {
+      cmd = goToGoal(goalX, goalY);
+  }
+
+APPLY:
+  stepperLeft.setSpeed(cmd.leftSpeed);
+  stepperRight.setSpeed(cmd.rightSpeed);
+  stepperLeft.runSpeed();
+  stepperRight.runSpeed();
+  
 }
