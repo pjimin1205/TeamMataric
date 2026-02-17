@@ -16,7 +16,7 @@
 #define STEPS_PER_ROT 800 //number of steps per wheel rotation
 #define CM_PER_ROTATION 26.39 //circumference of wheel in centimeters
 #define CM_TO_STEPS_CONV (STEPS_PER_ROT/(float)CM_PER_ROTATION) //conversion factor from centimeters to steps
-#define ENCODER_TICKS_PER_ROTATION 20 //number of encoder ticks per wheel rotation
+#define ENCODER_TICKS_PER_ROTATION 40 //number of encoder ticks per wheel rotation
 #define CM_PER_FOOT 30.48 // number of centimeters in a foot
 #define CELL_SIZE_CM 46.0 // size of a cell in the grid for path following
 // ------------------------------------- LED's -------------------------------------------------------------------------
@@ -58,9 +58,9 @@ int pathLength = 0;
 int currentPathStep = 0;
 
 int8_t grid[ROWS][COLS] = {
-  {0, 99, 99, 0},
   {0, 0, 0, 0},
-  {0, 99, 99, 0},
+  {0, 0, 0, 0},
+  {0, 99, 0, 0},
   {100, 99,  101, 0}
 };
 
@@ -281,6 +281,51 @@ void onMqttMessage(int messageSize) {
     Serial.println(pathStr);
     return;
   }
+  // ---------------- OCCUPANCY MAP COMMAND ----------------
+  // Expected format: OCC:ROWS,COLS:val,val,...;val,val,...
+  // Values: -2 -> obstacle, 100 -> START, 101 -> GOAL, 0 -> empty
+  if (message.startsWith("OCC:")) {
+    int p1 = message.indexOf(':');
+    int p2 = message.indexOf(':', p1 + 1);
+    if (p2 == -1) { sendMessage("TEXT:OCC parse error"); return; }
+    String dims = message.substring(p1 + 1, p2);
+    int comma = dims.indexOf(',');
+    if (comma == -1) { sendMessage("TEXT:OCC dims error"); return; }
+    int r = dims.substring(0, comma).toInt();
+    int c = dims.substring(comma + 1).toInt();
+    // Validate dims against compile-time grid size to avoid OOB
+    if (r != ROWS || c != COLS) { sendMessage("TEXT:OCC dims mismatch"); return; }
+    String data = message.substring(p2 + 1);
+    int rr = 0;
+    int start = 0;
+    for (rr = 0; rr < r; rr++) {
+      int semi = data.indexOf(';', start);
+      String rowStr;
+      if (semi == -1) rowStr = data.substring(start);
+      else rowStr = data.substring(start, semi);
+      start = (semi == -1) ? data.length() : semi + 1;
+      int cc = 0;
+      int sidx = 0;
+      while (sidx < (int)rowStr.length() && cc < c) {
+        int nc = rowStr.indexOf(',', sidx);
+        String val;
+        if (nc == -1) { val = rowStr.substring(sidx); sidx = rowStr.length(); }
+        else { val = rowStr.substring(sidx, nc); sidx = nc + 1; }
+        val.trim();
+        int v = val.toInt();
+        if (cc >= 0 && cc < COLS && rr >= 0 && rr < ROWS) {
+          if (v == -2) grid[rr][cc] = OBSTACLE;
+          else if (v == START_VAL) grid[rr][cc] = START_VAL;
+          else if (v == GOAL_VAL) grid[rr][cc] = GOAL_VAL;
+          else grid[rr][cc] = EMPTY;
+        }
+        cc++;
+      }
+    }
+    sendMessage("TEXT:Occupancy updated");
+    runGrassfire();
+    return;
+  }
   // -------- PATH FORMAT VALIDATION --------
   if (pathStr.length() < 2) {
     sendMessage("TEXT:Path error: too short");
@@ -297,13 +342,14 @@ void onMqttMessage(int messageSize) {
     return;
   }
 
-  for (int i = 0; i < pathStr.length(); i++) {
+  for (int i = 0; i < (int)pathStr.length(); i++) {
     char c = pathStr[i];
     if (c != 'S' && c != 'F' && c != 'L' && c != 'R' && c != 'T') {
       sendMessage("TEXT:Path error: invalid character");
       return;
     }
   }
+
 
   if (pathStr.length() >= MAX_PATH_LEN) {
     sendMessage("TEXT:Path error: too long");
@@ -388,45 +434,48 @@ void updateSensorData(){
 }
 
 void updateOdometry() {
-    // Get current absolute positions from the AccelStepper objects
-    long currLeft = stepperLeft.currentPosition();
-    long currRight = stepperRight.currentPosition();
+  // Use encoder values for odometry
+  static long lastLeftEnc = 0;
+  static long lastRightEnc = 0;
+  long currLeftEnc = sensorData.encoderLeft;
+  long currRightEnc = sensorData.encoderRight;
 
-    // 1. Calculate change in steps
-    long dLeftSteps = currLeft - lastLeftSteps;
-    long dRightSteps = currRight - lastRightSteps;
+  // 1. Calculate change in encoder ticks
+  long dLeftTicks = currLeftEnc - lastLeftEnc;
+  long dRightTicks = currRightEnc - lastRightEnc;
 
-    // 2. Convert steps to distance (cm)
-    // Note: Use (float) to ensure decimal precision
-    float dLeftCM = -(dLeftSteps / (float)CM_TO_STEPS_CONV);
-    float dRightCM = -(dRightSteps / (float)CM_TO_STEPS_CONV);
+  // 2. Convert ticks to distance (cm)
+  float leftRot = dLeftTicks / (float)ENCODER_TICKS_PER_ROTATION;
+  float rightRot = dRightTicks / (float)ENCODER_TICKS_PER_ROTATION;
+  float dLeftCM = leftRot * CM_PER_ROTATION;
+  float dRightCM = rightRot * CM_PER_ROTATION;
 
-    // 3. Differential Drive Kinematics
-    float dCenter = (dLeftCM + dRightCM) / 2.0;
-    float dPhi = (dRightCM - dLeftCM) / WIDTH_OF_BOT_CM; // Change in heading
+  // 3. Differential Drive Kinematics
+  float dCenter = (dLeftCM + dRightCM) / 2.0;
+  float dPhi = (dRightCM - dLeftCM) / WIDTH_OF_BOT_CM; // Change in heading
 
-    // 4. Update Global Pose
-    robotX += dCenter * cos(robotTheta + (dPhi / 2.0));
-    robotY += dCenter * sin(robotTheta + (dPhi / 2.0));
-    robotTheta += dPhi;
+  // 4. Update Global Pose
+  robotX += dCenter * cos(robotTheta + (dPhi / 2.0));
+  robotY += dCenter * sin(robotTheta + (dPhi / 2.0));
+  robotTheta += dPhi;
 
-    // Keep theta between -PI and PI
-    if (robotTheta > PI) robotTheta -= TWO_PI;
-    if (robotTheta < -PI) robotTheta += TWO_PI;
+  // Keep theta between -PI and PI
+  if (robotTheta > PI) robotTheta -= TWO_PI;
+  if (robotTheta < -PI) robotTheta += TWO_PI;
 
-    // Save state for next loop
-    lastLeftSteps = currLeft;
-    lastRightSteps = currRight;
+  // Save state for next loop
+  lastLeftEnc = currLeftEnc;
+  lastRightEnc = currRightEnc;
 
-    if (millis() - lastOdoPrint > 500) { // Print every 500ms
-        lastOdoPrint = millis();
-        Serial.print("Pose: X=");
-        Serial.print(robotX);
-        Serial.print(" Y=");
-        Serial.print(robotY);
-        Serial.print(" Theta=");
-        Serial.println(robotTheta * 180 / PI); // Convert to degrees for readability
-    }
+  if (millis() - lastOdoPrint > 500) { // Print every 500ms
+    lastOdoPrint = millis();
+    Serial.print("Pose: X=");
+    Serial.print(robotX);
+    Serial.print(" Y=");
+    Serial.print(robotY);
+    Serial.print(" Theta=");
+    Serial.println(robotTheta * 180 / PI); // Convert to degrees for readability
+  }
 }
 
 float wrapAngle(float a) {
@@ -456,8 +505,8 @@ int randomWanderTimer = 0;
   Sets the current state between CENTER, LEFT_WALL, RIGHT_WALL, RANDOM_WANDER and GO_TO_GOAL
 */
 void updateNavState_wall_follow() {   
-    if (sensorData.backLidar < maximumStoppingDist && sensorData.backLidar > 0
-    || millis() - preventTime < stateDelay){
+    if ((sensorData.backLidar < maximumStoppingDist && sensorData.backLidar > 0)
+    || (millis() - preventTime < (unsigned long)stateDelay)){
       // avoidFlag == true;
       // avoidStartTime = millis();   
       return;// Stay in current state but let avoidance handle it
@@ -518,6 +567,8 @@ void updateNavState_path() {
     return;
   }
 
+  // Determine current command character from loaded path
+  char cmd = path[pathIndex];
   switch (cmd) {
     case 'S': currPathState = START; break;
     case 'F': currPathState = FORWARD; break;
@@ -616,8 +667,12 @@ void runGrassfire() {
       }
     }
   }
-  sendDistanceMap(); // Sends the map to MQTT
+  sendTopDistanceMap(); // Sends the map to MQTT
   printResults();
+  // After computing distances, auto-generate a path from S -> Goal
+  generatePath();
+  currentPathStep = 1; // start by going to the first step after the start cell
+  updateTargetFromPath();
 }
 
 void printResults() {
@@ -693,18 +748,46 @@ void generatePath() {
         }
         if (pathLength > ROWS * COLS) break; // Safety break
     }
+
+  // Print the planned path to serial
+  Serial.println("Planned path (row,col):");
+  for (int i = 0; i < pathLength; i++) {
+    Serial.print("(");
+    Serial.print(pathCoords[i].r);
+    Serial.print(",");
+    Serial.print(pathCoords[i].c);
+    Serial.print(") ");
+  }
+  Serial.println();
 }
 
 void updateTargetFromPath() {
-    if (currentPathStep < pathLength) {
-        // Convert grid (row, col) to real world (x, y)
-        // Note: Rows usually map to X and Cols to Y, or vice versa depending on your orientation
-        goalX = pathCoords[currentPathStep].r * CELL_SIZE_CM;
-        goalY = pathCoords[currentPathStep].c * CELL_SIZE_CM;
-        goalSet = true;
-    } else {
-        goalSet = false; // Path finished
-    }
+  if (currentPathStep < pathLength) {
+    // Convert grid (row, col) to real world (x, y)
+    goalX = pathCoords[currentPathStep].r * CELL_SIZE_CM;
+    goalY = pathCoords[currentPathStep].c * CELL_SIZE_CM;
+    goalSet = true;
+    Serial.print("Now targeting waypoint ");
+    Serial.print(currentPathStep);
+    Serial.print(" at grid (");
+    Serial.print(pathCoords[currentPathStep].r);
+    Serial.print(",");
+    Serial.print(pathCoords[currentPathStep].c);
+    Serial.print(") -> world (X=");
+    Serial.print(goalX);
+    Serial.print(", Y=");
+    Serial.print(goalY);
+    Serial.println(")");
+    Serial.print("Robot pose: X=");
+    Serial.print(robotX);
+    Serial.print(", Y=");
+    Serial.print(robotY);
+    Serial.print(", Theta=");
+    Serial.println(robotTheta * 180 / PI);
+  } else {
+    goalSet = false; // Path finished
+    Serial.println("Path finished. No more waypoints.");
+  }
 }
 
 MotorCommand goToGoal(float targetX, float targetY) {
@@ -726,8 +809,9 @@ MotorCommand goToGoal(float targetX, float targetY) {
     // Normalize alpha to (-PI, PI)
     while (alpha > PI) alpha -= TWO_PI;
     while (alpha < -PI) alpha += TWO_PI;
-    Serial.println(distanceToGoal);
-    // 3. Stop condition
+    //Serial.println(distanceToGoal);
+    
+    // 3. Stop condition - go to next goal
     if (distanceToGoal < 1) { // Within 5cm
         Serial.println("Goal Reached");
         return {0, 0, false}; 
@@ -914,7 +998,7 @@ MotorCommand avoidObstacle(){
   }
 
   // 3. STATE CHECK: Are we currently avoiding (either seeing it or recently saw it)?
-  if (millis() - preventTime < stateDelay) {    
+  if (millis() - preventTime < (unsigned long)stateDelay) {    
     cmd.active = true;
     digitalWrite(enableLED, HIGH);
 
@@ -932,6 +1016,7 @@ MotorCommand avoidObstacle(){
 
   return cmd;
 }
+
 MotorCommand turnLeft() {
   MotorCommand cmd = {0, 0, true};
 
@@ -939,22 +1024,31 @@ MotorCommand turnLeft() {
     pathActionActive = true;
     actionStartTheta = robotTheta;
     targetTheta = wrapAngle(robotTheta + PI/2);
+    Serial.print("Turning LEFT: targetTheta=");
+    Serial.println(targetTheta * 180 / PI);
   }
 
   float err = wrapAngle(targetTheta - robotTheta);
+  Serial.print("Current theta: ");
+  Serial.print(robotTheta * 180 / PI);
+  Serial.print(", error: ");
+  Serial.println(err * 180 / PI);
 
   if (fabs(err) < TURN_TOL) {
     pathActionActive = false;
     pathIndex++;
+    Serial.println("Turn LEFT complete.");
     return {0, 0, false};
   }
 
-  int turnSpeed = constrain(400 * err, -600, 600); // P control
+  // Lower gain, lower max speed, invert for backwards robot
+  int turnSpeed = constrain(-200 * err, -300, 300); // Negative for backwards
   cmd.leftSpeed  = -turnSpeed;
   cmd.rightSpeed =  turnSpeed;
 
   return cmd;
 }
+
 
 MotorCommand turnRight() {
   MotorCommand cmd = {0, 0, true};
@@ -963,17 +1057,25 @@ MotorCommand turnRight() {
     pathActionActive = true;
     actionStartTheta = robotTheta;
     targetTheta = wrapAngle(robotTheta - PI/2);
+    Serial.print("Turning RIGHT: targetTheta=");
+    Serial.println(targetTheta * 180 / PI);
   }
 
   float err = wrapAngle(targetTheta - robotTheta);
+  Serial.print("Current theta: ");
+  Serial.print(robotTheta * 180 / PI);
+  Serial.print(", error: ");
+  Serial.println(err * 180 / PI);
 
   if (fabs(err) < TURN_TOL) {
     pathActionActive = false;
     pathIndex++;
+    Serial.println("Turn RIGHT complete.");
     return {0, 0, false};
   }
 
-  int turnSpeed = constrain(400 * err, -600, 600);
+  // Lower gain, lower max speed, invert for backwards robot
+  int turnSpeed = constrain(-200 * err, -300, 300); // Negative for backwards
   cmd.leftSpeed  = -turnSpeed;
   cmd.rightSpeed =  turnSpeed;
 
@@ -1062,15 +1164,14 @@ void setup() {
 }
 
 void loop() {
-  updateSensorData();
-  //updateNavState_path();
+  updateSensorData(); // refresh sensor data readings
+  updateNavState_path(); // update movement state as necessary
   //updateNavState_wall_follow();
-  updateOdometry();
-  mqttClient.poll();
+  updateOdometry(); // update robot perception of its position
+  mqttClient.poll(); // pull any commands from MQTT
 
-  //MQTT publishing logic:
+  //MQTT publishing logic: Publish sensor data every couple milliseconds
   unsigned long currentMillis = millis();
-  
   if (currentMillis - lastSensorPublish >= sensorPublishInterval) {
     lastSensorPublish = currentMillis;
     publishSensorData();
@@ -1088,57 +1189,24 @@ void loop() {
   } else {
     cmd = {0, 0, false};
   }
-  
-  /*
-  // --- LAYER 0: COLLISION (Highest Priority) ---
-  c = collide();
-  if(c.active){ cmd = c; goto APPLY; }
-
-  // --- LAYER 1: OBSTACLE AVOIDANCE ---
-  c = avoidObstacle();
-  if(c.active){ cmd = c; goto APPLY; }
-
-  // --- LAYER 2: GO TO GOAL ---
-  // If a goal is set, try to do this FIRST.
-  if(goalSet) {
-    c = goToGoal(goalX, goalY);
-    if(c.active) {
-      cmd = c;
-      goto APPLY; // "Break away" from walls to head to goal!
-    }
-  }
-
-  // --- LAYER 3: NAVIGATION (Wall Following / Center) ---
-  // If no goal is set, or if goToGoal is inactive, follow walls.
-  // c = moveBehavior();
-  if(c.active) {
-    cmd = c;
-    goto APPLY;
-  }
-  p = movePathBehavior();
-  if (p.active || currPathState == TERMINATE) {
-    cmd = p;
-    goto APPLY;
-  }
-
-  APPLY:
-    stepperLeft.setSpeed(-cmd.leftSpeed);
-    stepperRight.setSpeed(-cmd.rightSpeed);
-    stepperLeft.runSpeed();
-    stepperRight.runSpeed();
-
-  */
 
   // 1. Check if we reached the current waypoint
   if (goalSet) {
-      float dx = goalX - robotX;
-      float dy = goalY - robotY;
-      float dist = sqrt(dx*dx + dy*dy);
-
-      if (dist < 5.0) { // If within 5cm of current cell center
-          currentPathStep++;
-          updateTargetFromPath(); // Get next coordinate
-      }
+    float dx = goalX - robotX;
+    float dy = goalY - robotY;
+    float dist = sqrt(dx*dx + dy*dy);
+    
+    if (dist < 5.0) { // If within 5cm of current cell center
+      Serial.print("Reached waypoint ");
+      Serial.print(currentPathStep);
+      Serial.print(" at (X=");
+      Serial.print(goalX);
+      Serial.print(", Y=");
+      Serial.print(goalY);
+      Serial.println(")");
+      currentPathStep++;
+      updateTargetFromPath(); // Get next coordinate
+    }
   }
   
   // --- LAYER 0: COLLISION ---
