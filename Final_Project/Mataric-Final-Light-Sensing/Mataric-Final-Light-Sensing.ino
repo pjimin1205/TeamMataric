@@ -124,7 +124,7 @@ struct SensorPacket {
 unsigned long lastSensorRequest = 0;
 const long sensorInterval = 100; // Query sensors every 100 ms
 SensorPacket sensorData;
-bool printSenRead = false; // for debug
+bool printSenRead = true; // for debug
 
 /*
   updateSensorData()
@@ -153,7 +153,10 @@ void updateSensorData(){
       Serial.print(" | PhotoLeft: "); Serial.print(sensorData.photoLeft);
       Serial.print(" | PhotoRight: "); Serial.print(sensorData.photoRight);
       Serial.print(" | EncoderLeft: "); Serial.print(sensorData.encoderLeft);
-      Serial.print(" | EncoderRight: "); Serial.print(sensorData.encoderRight);
+      Serial.print(" | HuskyLens X: "); Serial.print(sensorData.huskyLensX);
+      Serial.print(" | HuskyLens Y: "); Serial.print(sensorData.huskyLensY);
+      Serial.print(" | HuskyLens Width: "); Serial.print(sensorData.huskyLensWidth);
+      Serial.print(" | HuskyLens Height: "); Serial.print(sensorData.huskyLensHeight);
       Serial.println();
     }
   }
@@ -214,6 +217,18 @@ int wallLostTimestamp = 0;
 int stateDelay = 500; // 5000 -> 0 ms, delays state for 5000 ms
 int preventTime = -5000;
 
+// ---------------- Light Modes ----------------
+enum LightMode {
+  FEAR_MODE,     // rotate away from light, stay mostly in place
+  LOVE_MODE,     // rotate toward light (approach)
+  EXPLORER_MODE, // random wander, avoid light when seen
+  AGGRESSION_MODE// random wander, turn toward light when seen
+};
+
+LightMode currentLightMode = LOVE_MODE;
+const int LIGHT_THRESHOLD = 500; // photoresistor threshold (adjust as needed)
+const int LIGHT_TURN_SPEED = 600; // speed used for in-place turning
+
 int randomWanderTimer = 0;
 # define randomWanderInterval 1000
 
@@ -227,11 +242,12 @@ void updateNavState() {
   Serial.println(currState);
   bool leftWallPresent = (sensorData.rightLidar > 0 && sensorData.rightLidar < 30);
   bool rightWallPresent = (sensorData.leftLidar > 0 && sensorData.leftLidar < 30);
-  bool leftLightPresent = (sensorData.photoRight > 800); // adjust threshold as needed
-  bool rightLightPresent = (sensorData.photoLeft > 800); // adjust threshold as needed
+  bool leftLightPresent = (sensorData.photoRight > LIGHT_THRESHOLD); // adjust threshold as needed
+  bool rightLightPresent = (sensorData.photoLeft > LIGHT_THRESHOLD); // adjust threshold as needed
 
   if(leftLightPresent || rightLightPresent){ // sees both lights
     currState = FOLLOW_LIGHT;
+    Serial.println("following light");
   }
   else if(leftWallPresent && rightWallPresent){ // sees both walls
     currState = CENTER;
@@ -355,7 +371,14 @@ MotorCommand goToGoal(float targetX, float targetY) {
 MotorCommand moveBehavior(){
   switch (currState){
     case FOLLOW_LIGHT:
-      return followLight();
+      // FOLLOW_LIGHT behavior depends on the selected light mode
+      switch(currentLightMode){
+        case FEAR_MODE: return lightFear();
+        case LOVE_MODE: return lightLove();
+        case EXPLORER_MODE: return explorerBehavior();
+        case AGGRESSION_MODE: return aggressionBehavior();
+        default: return followLight();
+      }
     case LEFT_WALL:
       return followLeftWallPD();
     case RIGHT_WALL:
@@ -365,6 +388,9 @@ MotorCommand moveBehavior(){
     case GO_TO_GOAL:
       return goToGoal(goalX, goalY);
     case RANDOM_WANDER:
+      // RANDOM_WANDER can be influenced by mode
+      if(currentLightMode == EXPLORER_MODE) return explorerBehavior();
+      if(currentLightMode == AGGRESSION_MODE) return aggressionBehavior();
       return randomWander();
     default:
       return {0, 0, false};
@@ -600,6 +626,126 @@ MotorCommand followLight(){
 
   return cmd;
 }
+// --------------------------------- Light-mode behaviors -------------------------------------------------------------
+// Rotate in place away from detected light
+MotorCommand lightFear(){
+  MotorCommand cmd = {0,0,false};
+  int leftPhoto = sensorData.photoLeft;
+  int rightPhoto = sensorData.photoRight;
+
+  bool seeLight = (leftPhoto > LIGHT_THRESHOLD) || (rightPhoto > LIGHT_THRESHOLD) || (sensorData.huskyLensWidth>0);
+  if(!seeLight) return cmd; // inactive if no light
+
+  cmd.active = true;
+  if(sensorData.huskyLensWidth>0 && sensorData.huskyLensX>0){
+    int cx = sensorData.huskyLensX - 160; // assume 320px frame center
+    if(cx > 0){ // object to right -> rotate left (to move away)
+      cmd.leftSpeed = -LIGHT_TURN_SPEED;
+      cmd.rightSpeed = LIGHT_TURN_SPEED;
+    } else {
+      cmd.leftSpeed = LIGHT_TURN_SPEED;
+      cmd.rightSpeed = -LIGHT_TURN_SPEED;
+    }
+    return cmd;
+  }
+
+  int diff = leftPhoto - rightPhoto;
+  if(diff > 50){ // more light on left -> rotate right
+    cmd.leftSpeed = LIGHT_TURN_SPEED;
+    cmd.rightSpeed = -LIGHT_TURN_SPEED;
+  } else if(diff < -50){ // more light on right -> rotate left
+    cmd.leftSpeed = -LIGHT_TURN_SPEED;
+    cmd.rightSpeed = LIGHT_TURN_SPEED;
+  } else { // centered, rotate slowly
+    cmd.leftSpeed = LIGHT_TURN_SPEED;
+    cmd.rightSpeed = -LIGHT_TURN_SPEED;
+  }
+  return cmd;
+}
+
+// Rotate in place toward detected light (approach)
+MotorCommand lightLove(){
+  MotorCommand cmd = {0,0,false};
+  int leftPhoto = sensorData.photoLeft;
+  int rightPhoto = sensorData.photoRight;
+
+  bool seeLight = (leftPhoto > LIGHT_THRESHOLD) || (rightPhoto > LIGHT_THRESHOLD) || (sensorData.huskyLensWidth>0);
+  if(!seeLight) return cmd;
+
+  cmd.active = true;
+  if(sensorData.huskyLensWidth>0 && sensorData.huskyLensX>0){
+    int cx = sensorData.huskyLensX - 160;
+    if(cx > 0){ // object to right -> rotate toward right
+      cmd.leftSpeed = -LIGHT_TURN_SPEED;
+      cmd.rightSpeed = LIGHT_TURN_SPEED;
+    } else {
+      cmd.leftSpeed = LIGHT_TURN_SPEED;
+      cmd.rightSpeed = -LIGHT_TURN_SPEED;
+    }
+    return cmd;
+  }
+
+  int diff = leftPhoto - rightPhoto;
+  if(diff > 50){ // more light on left -> rotate left toward it
+    cmd.leftSpeed = -LIGHT_TURN_SPEED;
+    cmd.rightSpeed = LIGHT_TURN_SPEED;
+  } else if(diff < -50){ // more light on right -> rotate right toward it
+    cmd.leftSpeed = LIGHT_TURN_SPEED;
+    cmd.rightSpeed = -LIGHT_TURN_SPEED;
+  } else {
+    // move forward slowly toward centered light
+    cmd.leftSpeed = base_speed/2;
+    cmd.rightSpeed = base_speed/2;
+  }
+  return cmd;
+}
+
+// Explorer: wander randomly but bias away from light when detected
+MotorCommand explorerBehavior(){
+  MotorCommand cmd = randomWander();
+  int leftPhoto = sensorData.photoLeft;
+  int rightPhoto = sensorData.photoRight;
+  bool seeLight = (leftPhoto > LIGHT_THRESHOLD) || (rightPhoto > LIGHT_THRESHOLD) || (sensorData.huskyLensWidth>0);
+  if(!seeLight) return cmd;
+
+  int diff = leftPhoto - rightPhoto;
+  int turn = constrain((int)(0.8 * diff), -400, 400);
+  cmd.leftSpeed  = base_speed - turn;
+  cmd.rightSpeed = base_speed + turn;
+  return cmd;
+}
+
+// Aggression: wander randomly but bias toward light when detected
+MotorCommand aggressionBehavior(){
+  MotorCommand cmd = randomWander();
+  int leftPhoto = sensorData.photoLeft;
+  int rightPhoto = sensorData.photoRight;
+  bool seeLight = (leftPhoto > LIGHT_THRESHOLD) || (rightPhoto > LIGHT_THRESHOLD) || (sensorData.huskyLensWidth>0);
+  if(!seeLight) return cmd;
+
+  int diff = leftPhoto - rightPhoto;
+  int turn = constrain((int)(0.8 * diff), -400, 400);
+  cmd.leftSpeed  = base_speed + turn;
+  cmd.rightSpeed = base_speed - turn;
+  return cmd;
+}
+// ---------------------------------------------------------------------------------------------------------------
+
+// Read serial input and set the current light mode.
+// Commands: '0' or 'f' -> FEAR, '1' or 'l' -> LOVE, '2' or 'e' -> EXPLORER, '3' or 'a' -> AGGRESSION
+void setModeFromSerial(){
+  if(Serial.available()){
+    char c = Serial.read();
+    switch(c){
+      case '0': case 'f': case 'F': currentLightMode = FEAR_MODE; Serial.println("Mode: FEAR"); break;
+      case '1': case 'l': case 'L': currentLightMode = LOVE_MODE; Serial.println("Mode: LOVE"); break;
+      case '2': case 'e': case 'E': currentLightMode = EXPLORER_MODE; Serial.println("Mode: EXPLORER"); break;
+      case '3': case 'a': case 'A': currentLightMode = AGGRESSION_MODE; Serial.println("Mode: AGGRESSION"); break;
+      default: /* ignore other chars */ break;
+    }
+  }
+}
+
 // -----------------------------------------Layer 0 ------------------------------------------------------------------------
 // robot detects object too close, stops the robot
 MotorCommand collide(){
@@ -671,6 +817,7 @@ void setup() {
 }
 
 void loop() {
+  setModeFromSerial();
   updateSensorData();
   updateNavState();
   updateOdometry();
