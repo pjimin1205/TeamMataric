@@ -49,8 +49,8 @@ struct MotorCommand{
 #define GOAL_VAL 101
 
 
-struct Point {
-  int r, c;
+struct Point { // point in the grid
+  int r, c; // row & col
 };
 
 Point pathCoords[ROWS * COLS];
@@ -102,8 +102,8 @@ struct SensorPacket {
 };
 
 #define MAX_PATH_LEN 50
-char path[MAX_PATH_LEN] = "";
 
+char path[MAX_PATH_LEN] = "";
 int pathIndex = 0; // update path index once a move has been completed
 
 // --------------------------------- goToGoal Initial Vars -------------------------------------------------------------------
@@ -274,7 +274,7 @@ void onMqttMessage(int messageSize) {
     pathStr.toCharArray(path, sizeof(path));
     // Reset pathTEXT:Path loadedstate
     pathIndex = 0;
-    currPathState = START;
+    currPathState = START; // path[0] should be start
     pathActionActive = false;
     sendMessage("TEXT:Path loaded:" + pathStr);
     Serial.print("New path loaded: ");
@@ -484,61 +484,12 @@ float wrapAngle(float a) {
   return a;
 }
 
-enum NavState { // state machine, only affects goal/navigation behaviors
-  LEFT_WALL,
-  RIGHT_WALL,
-  CENTER,
-  AVOID,
-  RANDOM_WANDER,
-  GO_TO_GOAL
-};
-
-NavState currState = RANDOM_WANDER;  // Change this to switch modes
 int wallLostTimestamp = 0;
 int stateDelay = 500; // 5000 -> 0 ms, delays state for 5000 ms
 int preventTime = -5000;
 
 int randomWanderTimer = 0;
 # define randomWanderInterval 1000
-
-/*
-  Sets the current state between CENTER, LEFT_WALL, RIGHT_WALL, RANDOM_WANDER and GO_TO_GOAL
-*/
-void updateNavState_wall_follow() {   
-    if ((sensorData.backLidar < maximumStoppingDist && sensorData.backLidar > 0)
-    || (millis() - preventTime < (unsigned long)stateDelay)){
-      // avoidFlag == true;
-      // avoidStartTime = millis();   
-      return;// Stay in current state but let avoidance handle it
-    }
-  //Serial.println(currState);
-  bool leftWallPresent = (sensorData.rightLidar > 0 && sensorData.rightLidar < 30);
-  bool rightWallPresent = (sensorData.leftLidar > 0 && sensorData.leftLidar < 30);
- 
-  if(leftWallPresent && rightWallPresent){ // sees both walls
-    currState = CENTER;
-    wallLostTimestamp = 0;
-  }
-  else if(leftWallPresent){ // sees left wall
-    currState = LEFT_WALL;
-    wallLostTimestamp = 0;
-  }
-  else if(rightWallPresent){ // sees right wall
-    currState = RIGHT_WALL;
-    wallLostTimestamp = 0;
-  }
-  else{ // doesn't see any wall
-    if(wallLostTimestamp == 0){
-      wallLostTimestamp = millis();
-    }
-    else if(millis() - wallLostTimestamp > 3000 && !goalSet){ // for an extended period of time and if there is no goal set
-      // if no walls for 3 seconds, go to random wander
-      currState = RANDOM_WANDER;
-    } else if(goalSet){ // if there is a goal set, go to goal
-      currState = GO_TO_GOAL;
-    }
-  }
-}
 
 // Odometry targets
 float targetTheta = 0;
@@ -629,6 +580,7 @@ MotorCommand randomWander(){
   return {randLeftSpeed, randRightSpeed, true};
 }
 
+// Develop map, path planning uses this
 void runGrassfire() {
   head = 0; tail = 0; // Reset queue
   Point goal = {-1, -1};
@@ -667,7 +619,7 @@ void runGrassfire() {
       }
     }
   }
-  sendTopDistanceMap(); // Sends the map to MQTT
+  //sendDistanceMap();
   printResults();
   // After computing distances, auto-generate a path from S -> Goal
   generatePath();
@@ -718,15 +670,15 @@ void sendDistanceMap() {
   sendMessage("TEXT:Grassfire complete");
 }
 
+// Make path to follow
 void generatePath() {
-    Point start;
-    // Find S in the grid
-    for (int r = 0; r < ROWS; r++) {
-        for (int c = 0; c < COLS; c++) {
-            if (grid[r][c] == START_VAL) { start = {r, c}; break; }
-        }
+  Point start;
+  // Find S in the grid
+  for (int r = 0; r < ROWS; r++) {
+    for (int c = 0; c < COLS; c++) {
+      if (grid[r][c] == START_VAL) { start = {r, c}; break; }
+      }
     }
-
     Point curr = start;
     pathLength = 0;
     pathCoords[pathLength++] = curr;
@@ -760,99 +712,9 @@ void generatePath() {
   }
   Serial.println();
 }
-
-void updateTargetFromPath() {
-  if (currentPathStep < pathLength) {
-    // Convert grid (row, col) to real world (x, y)
-    goalX = pathCoords[currentPathStep].r * CELL_SIZE_CM;
-    goalY = pathCoords[currentPathStep].c * CELL_SIZE_CM;
-    goalSet = true;
-    Serial.print("Now targeting waypoint ");
-    Serial.print(currentPathStep);
-    Serial.print(" at grid (");
-    Serial.print(pathCoords[currentPathStep].r);
-    Serial.print(",");
-    Serial.print(pathCoords[currentPathStep].c);
-    Serial.print(") -> world (X=");
-    Serial.print(goalX);
-    Serial.print(", Y=");
-    Serial.print(goalY);
-    Serial.println(")");
-    Serial.print("Robot pose: X=");
-    Serial.print(robotX);
-    Serial.print(", Y=");
-    Serial.print(robotY);
-    Serial.print(", Theta=");
-    Serial.println(robotTheta * 180 / PI);
-  } else {
-    goalSet = false; // Path finished
-    Serial.println("Path finished. No more waypoints.");
-  }
-}
-
-MotorCommand goToGoal(float targetX, float targetY) {
-    MotorCommand cmd = {0, 0, true};
-
-    digitalWrite(redLED, HIGH);//turn on red LED
-    digitalWrite(ylwLED, HIGH);//turn on yellow LED
-    digitalWrite(grnLED, HIGH);//turn on green LED
-
-
-    // 1. Calculate vector to goal
-    float dx = targetX - robotX;
-    float dy = targetY - robotY;
-    float distanceToGoal = sqrt(dx * dx + dy * dy);
-    float angleToGoal = atan2(dy, dx);
-
-    // 2. Calculate heading error
-    float alpha = angleToGoal - robotTheta;
-    // Normalize alpha to (-PI, PI)
-    while (alpha > PI) alpha -= TWO_PI;
-    while (alpha < -PI) alpha += TWO_PI;
-    //Serial.println(distanceToGoal);
-    
-    // 3. Stop condition - go to next goal
-    if (distanceToGoal < 1) { // Within 5cm
-        Serial.println("Goal Reached");
-        return {0, 0, false}; 
-    }
-
-    // 4. Control Gains (Tweak these!)
-    float K_linear = 10;  // Speed towards goal
-    float K_angular = 400; // Speed of turning
-
-    float v = K_linear * distanceToGoal;
-    float w = K_angular * alpha;
-
-    // Limit maximums to your base_speed
-    v = constrain(v, -base_speed, base_speed);
-    
-    cmd.leftSpeed = v - w;
-    cmd.rightSpeed = v + w;
-    cmd.active = true;
-
-    return cmd;
-}
 // -----------------------------------------Layer 2 ------------------------------------------------------------------------
 // example
 // collection of layer 1 movements, this is layer 2 because it has logic.
-MotorCommand moveBehavior(){
-  switch (currState){
-    case LEFT_WALL:
-      return followLeftWallPD();
-    case RIGHT_WALL:
-      return followRightWallPD();
-    case CENTER:
-      return followCenter();
-    case GO_TO_GOAL:
-      return goToGoal(goalX, goalY);
-    case RANDOM_WANDER:
-      return randomWander();
-    default:
-      return {0, 0, false};
-  }
-}
-
 MotorCommand movePathBehavior(){
   switch (currPathState){
     case LEFT:
@@ -869,114 +731,7 @@ MotorCommand movePathBehavior(){
       return {0, 0, false};
   }
 }
-
-MotorCommand followCenter(){
-  MotorCommand cmd = {base_speed, base_speed, true};
-
-  // LED Requirement: Turn on ALL 3 LEDs when following center [cite: 244, 269]
-  digitalWrite(redLED, HIGH);
-  digitalWrite(ylwLED, LOW);
-  digitalWrite(grnLED, LOW);
-
-  // Distances (Adjust sensor mapping based on your specific robot setup)
-  // Based on your previous code: rightLidar is on the left, leftLidar is on the right
-  float leftDist = sensorData.rightLidar; 
-  float rightDist = sensorData.leftLidar;
-
-  // Calculate the error: Difference between the two distances [cite: 30]
-  // A positive error means we are closer to the right wall
-  float error = leftDist - rightDist;
-
-  // Proportional gain (Suggested between 1 and 10) [cite: 44, 199]
-  const float Kp_center = 8.0; 
-  float turn = Kp_center * error;
-
-  // Constrain turn to prevent overwhelming base speed [cite: 31]
-  turn = constrain(turn, -125, 125);
-
-  // Apply steering logic
-  cmd.leftSpeed  = base_speed + turn;
-  cmd.rightSpeed = base_speed - turn;
-
-  return cmd;
-}
 // -----------------------------------------Layer 1 ------------------------------------------------------------------------
-// PD Control (uses angle to approximate behavior instead of time)
-MotorCommand followRightWallPD() {
-  MotorCommand cmd = {base_speed, base_speed, true};
-  digitalWrite(redLED, LOW);//turn on red LED
-  digitalWrite(ylwLED, HIGH);//turn on yellow LED
-  digitalWrite(grnLED, LOW);//turn on green LED
-
-  const float desiredDist = 12.0; // cm
-  const float Kp = 10.0;          // distance gain: 10-15
-  const float Kd = 80.0;          // angle gain (radians!): 50-100
-
-  float leftDist = sensorData.leftLidar;
-  float backLeft = sensorData.backLeftSonar;
-
-  float distError = desiredDist - leftDist;
-
-  // Angle error (already computed in your bang code)
-  float height = leftDist - backLeft; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
-  float base = 8.0; // cm between sensors
-  float angleError = atan2(height, base); // radians
-
-  float turn = (Kp * distError) + (Kd * angleError);
-  turn = constrain(turn, -125, 125);
-
-  cmd.leftSpeed  = base_speed + turn;
-  cmd.rightSpeed = base_speed - turn;
-
-  // if we lost the wall, turn left
-  if (leftDist <= 0 || leftDist > 50.0) {
-    // Perform a circle motion: Left wheel slow, Right wheel fast 
-    // to arc back toward where the wall should be.
-    cmd.leftSpeed  = base_speed * 0.4; 
-    cmd.rightSpeed = base_speed * 1.2;
-    return cmd; 
-  }
-  return cmd;
-}
-// PD Control (uses angle to approximate behavior instead of time)
-MotorCommand followLeftWallPD() {
-  MotorCommand cmd = {base_speed, base_speed, true};
-  
-  digitalWrite(redLED, LOW);//turn on red LED
-  digitalWrite(ylwLED, LOW);//turn on yellow LED
-  digitalWrite(grnLED, HIGH);//turn on green LED
-
-  const float desiredDist = 12.0; // cm
-  const float Kp = 10.0;          // distance gain: 10-15
-  const float Kd = 80.0;          // angle gain (radians!): 50-100
-
-  float leftDist = sensorData.rightLidar;
-  float backLeft = sensorData.backRightSonar;
-
-  float distError = desiredDist - leftDist;
-
-  // Angle error (already computed in your bang code)
-  float height = leftDist - backLeft; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
-  float base = 8.0; // cm between sensors
-  float angleError = atan2(height, base); // radians
-
-  float turn = (Kp * distError) + (Kd * angleError);
-  turn = constrain(turn, -125, 125);
-
-  cmd.leftSpeed  = base_speed - turn;
-  cmd.rightSpeed = base_speed + turn;
-
-  // if we lost the wall, turn left
-  if (leftDist <= 0 || leftDist > 50.0) {
-    // Perform a circle motion: Left wheel slow, Right wheel fast 
-    // to arc back toward where the wall should be.
-    cmd.leftSpeed  = base_speed * 1.2; 
-    cmd.rightSpeed = base_speed * 0.4;
-    return cmd; 
-  }
-
-  return cmd;
-}
 // if robot detects object too close, closer than deadband, use force vectors to move away
 MotorCommand avoidObstacle(){
   MotorCommand cmd = {0, 0, false};
@@ -1160,13 +915,12 @@ void setup() {
     }
     delay(100); 
   }
-  runGrassfire();
+  runGrassfire(); // generates path to follow
 }
 
 void loop() {
   updateSensorData(); // refresh sensor data readings
   updateNavState_path(); // update movement state as necessary
-  //updateNavState_wall_follow();
   updateOdometry(); // update robot perception of its position
   mqttClient.poll(); // pull any commands from MQTT
 
@@ -1183,32 +937,6 @@ void loop() {
   MotorCommand c;
   MotorCommand p;
   
-  // 1. DEFAULT: If no goal, default to forward wander. If goal, default to stop.
-  if(!goalSet) {
-    cmd = {base_speed, base_speed, true}; 
-  } else {
-    cmd = {0, 0, false};
-  }
-
-  // 1. Check if we reached the current waypoint
-  if (goalSet) {
-    float dx = goalX - robotX;
-    float dy = goalY - robotY;
-    float dist = sqrt(dx*dx + dy*dy);
-    
-    if (dist < 5.0) { // If within 5cm of current cell center
-      Serial.print("Reached waypoint ");
-      Serial.print(currentPathStep);
-      Serial.print(" at (X=");
-      Serial.print(goalX);
-      Serial.print(", Y=");
-      Serial.print(goalY);
-      Serial.println(")");
-      currentPathStep++;
-      updateTargetFromPath(); // Get next coordinate
-    }
-  }
-  
   // --- LAYER 0: COLLISION ---
   c = collide();
   if(c.active) { cmd = c; goto APPLY; }
@@ -1217,9 +945,11 @@ void loop() {
   c = avoidObstacle();
   if(c.active) { cmd = c; goto APPLY; }
 
-  // --- LAYER 2: GRASSFIRE PATH FOLLOWING ---
-  if(goalSet) {
-      cmd = goToGoal(goalX, goalY);
+  // --- LAYER 2: TOP. PATH FOLLOWING ---
+  p = movePathBehavior();
+  if(p.active || currPathState == TERMINATE) {
+      cmd = p;
+      goto APPLY;
   }
 
 APPLY:
