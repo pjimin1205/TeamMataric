@@ -7,6 +7,12 @@
 #include <ArduinoMqttClient.h>
 #include <WiFi.h>
 
+struct MotorCommand{
+  int leftSpeed;
+  int rightSpeed;
+  bool active;
+};
+
 // --------------------------------------- Constant Vars -------------------------------------------------------------
 #define INCHES_TO_CM 2.54 //conversion factor from inches to centimeters
 #define TWO_FEET_IN_STEPS 1848 //number of steps to move robot forward 2 feet
@@ -64,6 +70,10 @@ Point queue[ROWS * COLS];
 int head = 0;
 int tail = 0;
 
+void push(Point p) { queue[tail++] = p; }
+Point pop() { return queue[head++]; }
+bool isEmpty() { return head == tail; }
+
 struct SensorPacket {
     int frontLidar;
     int backLidar;
@@ -85,15 +95,13 @@ struct SensorPacket {
     MSGPACK_DEFINE_ARRAY(frontLidar, backLidar, leftLidar, rightLidar, frontLeftSonar, frontRightSonar, backLeftSonar, backRightSonar, photoLeft, photoRight, encoderLeft, encoderRight, huskyLensX, huskyLensY, huskyLensWidth, huskyLensHeight);
 };
 
-struct MotorCommand{
-  int leftSpeed;
-  int rightSpeed;
-  bool active;
-};
+#define MAX_PATH_LEN 50
 
-char path[] = "SFRFLFT";
-
+char path[MAX_PATH_LEN] = "";
 int pathIndex = 0; // update path index once a move has been completed
+
+// char path[] = "SFRFLFT";
+// int pathIndex = 0; // update path index once a move has been completed
 
 
 
@@ -519,7 +527,222 @@ void init_stepper(){
   digitalWrite(stepperEnable, stepperEnTrue);//turns on the stepper motor driver
   digitalWrite(enableLED, HIGH);//turn on enable LED
 }
+// ------------------------------------ independent functions ------------------------------------------
+// Develop map, path planning uses this
+void runGrassfire() {
+  head = 0; tail = 0; // Reset queue
+  Point goal = {-1, -1};
 
+  // Initialize distance grid
+  for (int r = 0; r < ROWS; r++) {
+    for (int c = 0; c < COLS; c++) {
+      distGrid[r][c] = -1; 
+      if (grid[r][c] == GOAL_VAL) {
+        goal = {r, c};
+        distGrid[r][c] = 0;
+      }
+    }
+  }
+
+  if (goal.r == -1) {
+    Serial.println("Error: No Goal (X) found in grid!");
+    return;
+  }
+
+  push(goal);
+
+  while (!isEmpty()) {
+    Point curr = pop();
+
+    for (int i = 0; i < 8; i++) {
+      int nr = curr.r + dr[i];
+      int nc = curr.c + dc[i];
+
+      // Boundary and Obstacle Check
+      if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
+        if (distGrid[nr][nc] == -1 && grid[nr][nc] != OBSTACLE) {
+          distGrid[nr][nc] = distGrid[curr.r][curr.c] + 1;
+          push({nr, nc});
+        }
+      }
+    }
+  }
+  //sendDistanceMap();
+  printResults();
+  // After computing distances, auto-generate a path from S -> Goal
+  generatePath();
+  convertPathToCommands();
+  Serial.print("path: ");
+  Serial.println(path);
+  currentPathStep = 1; // start by going to the first step after the start cell
+}
+void printResults() {
+  Serial.println("\n--- Grassfire Distance Map ---");
+  for (int r = 0; r < ROWS; r++) {
+    for (int c = 0; c < COLS; c++) {
+      if (grid[r][c] == OBSTACLE) Serial.print("##\t");
+      else if (distGrid[r][c] == -1) Serial.print("??\t");
+      else {
+        Serial.print(distGrid[r][c]);
+        Serial.print("\t");
+      }
+    }
+    Serial.println();
+  }
+  Serial.println("------------------------------\n");
+}
+void sendDistanceMap() {
+  // Build one big string with all grid data
+  String gridMsg = "GRID:" + String(ROWS) + "," + String(COLS) + ":";
+  
+  for (int r = 0; r < ROWS; r++) {
+    for (int c = 0; c < COLS; c++) {
+      if (grid[r][c] == OBSTACLE) {
+        gridMsg += "-2";  // Obstacle
+      } else if (distGrid[r][c] == -1) {
+        gridMsg += "-1";  // Unknown
+      } else {
+        gridMsg += String(distGrid[r][c]);
+      }
+      
+      // Add separator (comma between columns, semicolon between rows)
+      if (c < COLS - 1) {
+        gridMsg += ",";  // Comma between columns
+      } else if (r < ROWS - 1) {
+        gridMsg += ";";  // Semicolon between rows
+      }
+    }
+  }
+  
+  sendMessage(gridMsg);
+  sendMessage("TEXT:Grassfire complete");
+}
+// Make path to follow
+void generatePath() {
+  Point start;
+  // Find S in the grid
+  for (int r = 0; r < ROWS; r++) {
+    for (int c = 0; c < COLS; c++) {
+      if (grid[r][c] == START_VAL) { start = {r, c}; break; }
+      }
+    }
+    Point curr = start;
+    pathLength = 0;
+    pathCoords[pathLength++] = curr;
+
+    // While we aren't at the goal (distance 0)
+    while (distGrid[curr.r][curr.c] != 0) {
+        for (int i = 0; i < 8; i++) {
+            int nr = curr.r + dr[i];
+            int nc = curr.c + dc[i];
+
+            if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
+                // Move to the neighbor that is exactly 1 step closer to the goal
+                if (distGrid[nr][nc] == distGrid[curr.r][curr.c] - 1) {
+                    curr = {nr, nc};
+                    pathCoords[pathLength++] = curr;
+                    break; 
+                }
+            }
+        }
+        if (pathLength > ROWS * COLS) break; // Safety break
+    }
+
+  // Print the planned path to serial
+  Serial.println("Planned path (row,col):");
+  for (int i = 0; i < pathLength; i++) {
+    Serial.print("(");
+    Serial.print(pathCoords[i].r);
+    Serial.print(",");
+    Serial.print(pathCoords[i].c);
+    Serial.print(") ");
+  }
+  Serial.println();
+}
+// convert path from coordinates to path commands
+void convertPathToCommands() {
+
+  if (pathLength == 0) return;
+
+  int writeIndex = 0;
+  int currentDir = 0;  // 0=N,1=E,2=S,3=W
+  path[writeIndex++] = 'S';
+
+  for (int i = 0; i < pathLength - 1; i++) {
+
+    int dr = pathCoords[i+1].r - pathCoords[i].r;
+    int dc = pathCoords[i+1].c - pathCoords[i].c;
+
+    // =========================
+    // STRAIGHT MOVES
+    // =========================
+
+    // Moving North
+    if (dr == -1 && dc == 0) {
+      path[writeIndex++] = 'F';
+      currentDir = 0;
+    }
+
+    // Moving South
+    else if (dr == 1 && dc == 0) {
+      path[writeIndex++] = 'F';
+      currentDir = 2;
+    }
+
+    // Moving East
+    else if (dr == 0 && dc == 1) {
+      path[writeIndex++] = 'R';
+      path[writeIndex++] = 'F';
+      currentDir = 1;
+    }
+
+    // Moving West
+    else if (dr == 0 && dc == -1) {
+      path[writeIndex++] = 'L';
+      path[writeIndex++] = 'F';
+      currentDir = 3;
+    }
+
+    // =========================
+    // DIAGONALS
+    // =========================
+
+    // NE  (-1,+1)
+    else if (dr == -1 && dc == 1) {
+      path[writeIndex++] = 'F';
+      path[writeIndex++] = 'R';
+      path[writeIndex++] = 'F';
+      currentDir = 1;
+    }
+
+    // SE  (+1,+1)
+    else if (dr == 1 && dc == 1) {
+      path[writeIndex++] = 'F';
+      path[writeIndex++] = 'R';
+      path[writeIndex++] = 'F';
+      currentDir = 1;
+    }
+
+    // NW  (-1,-1)
+    else if (dr == -1 && dc == -1) {
+      path[writeIndex++] = 'F';
+      path[writeIndex++] = 'L';
+      path[writeIndex++] = 'F';
+      currentDir = 3;
+    }
+
+    // SW  (+1,-1)
+    else if (dr == 1 && dc == -1) {
+      path[writeIndex++] = 'F';
+      path[writeIndex++] = 'L';
+      path[writeIndex++] = 'F';
+      currentDir = 3;
+    }
+  }
+
+  path[writeIndex++] = 'T';
+  path[writeIndex] = '\0';
+}
 // -----------------------------------------Layer 3 ------------------------------------------------------------------------
 int randLeftSpeed = base_speed;
 int randRightSpeed = base_speed;
@@ -580,8 +803,7 @@ MotorCommand goToGoal(float targetX, float targetY) {
     return cmd;
 }
 // -----------------------------------------Layer 2 ------------------------------------------------------------------------
-// example
-// collection of layer 1 movements, this is layer 2 because it has logic.
+/*
 MotorCommand moveBehavior(){
   switch (currState){
     case LEFT_WALL:
@@ -598,6 +820,7 @@ MotorCommand moveBehavior(){
       return {0, 0, false};
   }
 }
+*/
 
 MotorCommand movePathBehavior(){
   switch (currPathState){
@@ -615,114 +838,7 @@ MotorCommand movePathBehavior(){
       return {0, 0, false};
   }
 }
-
-MotorCommand followCenter(){
-  MotorCommand cmd = {base_speed, base_speed, true};
-
-  // LED Requirement: Turn on ALL 3 LEDs when following center [cite: 244, 269]
-  digitalWrite(redLED, HIGH);
-  digitalWrite(ylwLED, LOW);
-  digitalWrite(grnLED, LOW);
-
-  // Distances (Adjust sensor mapping based on your specific robot setup)
-  // Based on your previous code: rightLidar is on the left, leftLidar is on the right
-  float leftDist = sensorData.rightLidar; 
-  float rightDist = sensorData.leftLidar;
-
-  // Calculate the error: Difference between the two distances [cite: 30]
-  // A positive error means we are closer to the right wall
-  float error = leftDist - rightDist;
-
-  // Proportional gain (Suggested between 1 and 10) [cite: 44, 199]
-  const float Kp_center = 8.0; 
-  float turn = Kp_center * error;
-
-  // Constrain turn to prevent overwhelming base speed [cite: 31]
-  turn = constrain(turn, -125, 125);
-
-  // Apply steering logic
-  cmd.leftSpeed  = base_speed + turn;
-  cmd.rightSpeed = base_speed - turn;
-
-  return cmd;
-}
 // -----------------------------------------Layer 1 ------------------------------------------------------------------------
-// PD Control (uses angle to approximate behavior instead of time)
-MotorCommand followRightWallPD() {
-  MotorCommand cmd = {base_speed, base_speed, true};
-  digitalWrite(redLED, LOW);//turn on red LED
-  digitalWrite(ylwLED, HIGH);//turn on yellow LED
-  digitalWrite(grnLED, LOW);//turn on green LED
-
-  const float desiredDist = 12.0; // cm
-  const float Kp = 10.0;          // distance gain: 10-15
-  const float Kd = 80.0;          // angle gain (radians!): 50-100
-
-  float leftDist = sensorData.leftLidar;
-  float backLeft = sensorData.backLeftSonar;
-
-  float distError = desiredDist - leftDist;
-
-  // Angle error (already computed in your bang code)
-  float height = leftDist - backLeft; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
-  float base = 8.0; // cm between sensors
-  float angleError = atan2(height, base); // radians
-
-  float turn = (Kp * distError) + (Kd * angleError);
-  turn = constrain(turn, -125, 125);
-
-  cmd.leftSpeed  = base_speed + turn;
-  cmd.rightSpeed = base_speed - turn;
-
-  // if we lost the wall, turn left
-  if (leftDist <= 0 || leftDist > 50.0) {
-    // Perform a circle motion: Left wheel slow, Right wheel fast 
-    // to arc back toward where the wall should be.
-    cmd.leftSpeed  = base_speed * 0.4; 
-    cmd.rightSpeed = base_speed * 1.2;
-    return cmd; 
-  }
-  return cmd;
-}
-// PD Control (uses angle to approximate behavior instead of time)
-MotorCommand followLeftWallPD() {
-  MotorCommand cmd = {base_speed, base_speed, true};
-  
-  digitalWrite(redLED, LOW);//turn on red LED
-  digitalWrite(ylwLED, LOW);//turn on yellow LED
-  digitalWrite(grnLED, HIGH);//turn on green LED
-
-  const float desiredDist = 12.0; // cm
-  const float Kp = 10.0;          // distance gain: 10-15
-  const float Kd = 80.0;          // angle gain (radians!): 50-100
-
-  float leftDist = sensorData.rightLidar;
-  float backLeft = sensorData.backRightSonar;
-
-  float distError = desiredDist - leftDist;
-
-  // Angle error (already computed in your bang code)
-  float height = leftDist - backLeft; // if negative, needs to turn (-) angle, if positive, need to turn (+) angle
-  float base = 8.0; // cm between sensors
-  float angleError = atan2(height, base); // radians
-
-  float turn = (Kp * distError) + (Kd * angleError);
-  turn = constrain(turn, -125, 125);
-
-  cmd.leftSpeed  = base_speed - turn;
-  cmd.rightSpeed = base_speed + turn;
-
-  // if we lost the wall, turn left
-  if (leftDist <= 0 || leftDist > 50.0) {
-    // Perform a circle motion: Left wheel slow, Right wheel fast 
-    // to arc back toward where the wall should be.
-    cmd.leftSpeed  = base_speed * 1.2; 
-    cmd.rightSpeed = base_speed * 0.4;
-    return cmd; 
-  }
-
-  return cmd;
-}
 // if robot detects object too close, closer than deadband, use force vectors to move away
 MotorCommand avoidObstacle(){
   MotorCommand cmd = {0, 0, false};
@@ -877,6 +993,7 @@ void setup() {
   delay(2000); 
 
   setupMQTTConnection();
+  runGrassfire();
 
   // Wait until we get a reading that isn't zero from a known sensor
   Serial.println("Waiting for valid sensor data...");
